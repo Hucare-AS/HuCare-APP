@@ -1,0 +1,11 @@
+node_modules
+dist
+.expo
+expo-env.d.ts
+package-lock.json
+assets
+nativewind-env.d.ts
+test-results
+playwright-report
+.e2e-ai
+.wrangler

@@ -1,0 +1,5 @@
+# Cloudflare Pages 설정 — `npm run deploy:pages` (wrangler pages deploy) 에서 사용한다.
+# 대시보드 Git 연동으로 배포할 때는 빌드 명령 `npm run build:pages`, 출력 디렉터리 `dist` 로 맞춘다.
+name = "hucare-webapp"
+pages_build_output_dir = "dist"
+compatibility_date = "2026-05-01"
