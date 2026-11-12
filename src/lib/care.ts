@@ -1,4 +1,6 @@
-import { useSyncExternalStore } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
+
+import { api, apiEnabled, getSubjectId } from '@/lib/api';
 
 /**
  * HuCare 데이터 (목업).
@@ -71,7 +73,9 @@ const initialEvents: CareEvent[] = [
   },
 ];
 
-let events = initialEvents;
+// 토큰이 있으면 서버가 진실의 원천이므로 목업을 보여 주지 않는다 (불러오기 전·실패·대상 없음은 빈 목록).
+const seedEvents = apiEnabled ? [] : initialEvents;
+let events = seedEvents;
 const listeners = new Set<() => void>();
 
 function subscribe(listener: () => void) {
@@ -81,12 +85,62 @@ function subscribe(listener: () => void) {
   };
 }
 
+const emit = () => listeners.forEach((listener) => listener());
+
+// ponytail: 아래 응답 필드명은 추측이다 (Swagger 에 응답 스키마가 없음). 실제 응답을 보고 이 매퍼만 고친다.
+const KIND_BY_API: Record<string, EventKind> = {
+  FALL: 'fall',
+  FALL_DETECTED: 'fall',
+  INACTIVITY: 'inactive',
+  INACTIVE: 'inactive',
+  NO_MOVEMENT: 'inactive',
+  DEVICE_OFFLINE: 'deviceOff',
+  DEVICE_OFF: 'deviceOff',
+};
+
+function toCareEvent(raw: any): CareEvent {
+  const ackAt = raw.acknowledgedAt ?? raw.ackAt;
+  return {
+    id: String(raw.id),
+    kind: KIND_BY_API[String(raw.type ?? raw.eventType ?? raw.kind).toUpperCase()] ?? 'inactive',
+    at: new Date(raw.occurredAt ?? raw.detectedAt ?? raw.createdAt),
+    heartRate: raw.heartRate ?? raw.metrics?.heartRate,
+    ack: ackAt
+      ? {
+          by: raw.acknowledgedByName ?? raw.acknowledgedBy?.displayName ?? '보호자',
+          at: new Date(ackAt),
+        }
+      : undefined,
+  };
+}
+
+let loadStarted = false;
+
+/** 서버에서 알림 목록을 한 번 받아 온다. 실패하면 목록은 비어 있고 다음 화면 진입 때 다시 시도한다. */
+async function loadEvents() {
+  if (loadStarted || !apiEnabled) return;
+  loadStarted = true;
+  try {
+    const subjectId = await getSubjectId();
+    if (!subjectId) return;
+    const res = await api<{ items?: unknown[] }>(`/guardian/events?subject_id=${subjectId}`);
+    events = (res.items ?? []).map(toCareEvent).sort((a, b) => b.at.getTime() - a.at.getTime());
+    emit();
+  } catch (error) {
+    loadStarted = false;
+    console.warn('알림을 불러오지 못했어요', error);
+  }
+}
+
 /** 최신순 이벤트 목록 */
 export function useEvents() {
+  useEffect(() => {
+    void loadEvents();
+  }, []);
   return useSyncExternalStore(
     subscribe,
     () => events,
-    () => initialEvents,
+    () => seedEvents,
   );
 }
 
@@ -95,7 +149,9 @@ export function acknowledgeEvent(id: string) {
   events = events.map((event) =>
     event.id === id && !event.ack ? { ...event, ack: { by: guardian.fullName, at: NOW } } : event,
   );
-  listeners.forEach((listener) => listener());
+  emit();
+  if (apiEnabled)
+    api(`/events/${id}/ack`, { method: 'POST' }).catch(() => console.warn('확인 처리 실패', id));
 }
 
 export type Measurement = {
