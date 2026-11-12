@@ -14,6 +14,10 @@ export async function api<T>(path: string, { method = 'GET', body }: Init = {}):
     headers: {
       Authorization: `Bearer ${TOKEN}`,
       ...(body ? { 'Content-Type': 'application/json' } : null),
+      // 생성(POST)은 서버가 중복 방지 키를 요구한다. 재시도 로직이 없어 호출마다 새 키를 쓴다.
+      ...(method === 'POST'
+        ? { 'Idempotency-Key': `${Date.now()}-${Math.random().toString(36).slice(2)}` }
+        : null),
     },
     body: body ? JSON.stringify(body) : undefined,
   });

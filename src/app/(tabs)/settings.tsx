@@ -1,13 +1,13 @@
 import { useState, type PropsWithChildren, type ReactNode } from 'react';
 import { Pressable, View } from 'react-native';
 
-import { SubjectSheet, type SubjectField, type SubjectInfo } from '@/components/subject-sheet';
+import { SubjectSheet, type SubjectField } from '@/components/subject-sheet';
 import { TabScreen } from '@/components/tab-screen';
 import { Icon } from '@/components/ui/icon';
 import { Select } from '@/components/ui/select';
 import { Text } from '@/components/ui/text';
 import { Toggle } from '@/components/ui/toggle';
-import { subject } from '@/lib/care';
+import { saveSubjectInfo, useSubjectInfo } from '@/lib/care';
 import { cn } from '@/lib/cn';
 import {
   updatePreferences,
@@ -71,11 +71,7 @@ const chevron = <Icon name="rowChevron" width={6.4} height={10} />;
 /** 설정 (Figma 786:539) */
 export default function SettingsScreen() {
   const preferences = usePreferences();
-  // ponytail: 화면 state만 — 백엔드/저장소 생기면 care.ts 쪽 update 함수로 교체
-  const [info, setInfo] = useState<SubjectInfo>({
-    ...subject,
-    family: subject.family.split(', '),
-  });
+  const { name, ...info } = useSubjectInfo();
   const [field, setField] = useState<SubjectField | null>(null);
   const open = (f: SubjectField) => () => setField(f);
 
@@ -140,23 +136,12 @@ export default function SettingsScreen() {
           <View className="gap-1">
             <View className="h-[38px] justify-center">
               <Text className="text-[20px] font-semibold leading-[30px] tracking-[-0.5px]">
-                {subject.relation}
+                {name}
               </Text>
             </View>
             <View className="gap-4">
               <Row title="전화번호" detail={info.phone} right={chevron} onPress={open('phone')} />
-              <Row
-                title="기기 설치 장소"
-                detail={info.place}
-                right={chevron}
-                onPress={open('place')}
-              />
-              <Row
-                title="함께 보는 가족"
-                detail={info.family.join(', ')}
-                right={chevron}
-                onPress={open('family')}
-              />
+              <Row title="함께 보는 가족" detail={info.family.join(', ')} />
               <Row
                 title="돌봄센터 연락처"
                 detail={info.careCenterPhone}
@@ -169,7 +154,8 @@ export default function SettingsScreen() {
         <SubjectSheet
           field={field}
           info={info}
-          onSave={(patch) => setInfo((prev) => ({ ...prev, ...patch }))}
+          name={name}
+          onSave={(patch) => void saveSubjectInfo(patch)}
           onClose={() => setField(null)}
         />
 

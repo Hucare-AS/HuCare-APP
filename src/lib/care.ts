@@ -3,16 +3,19 @@ import { useEffect, useSyncExternalStore } from 'react';
 import { api, apiEnabled, getSubjectId } from '@/lib/api';
 
 /**
- * HuCare 데이터 (목업).
- * 백엔드가 생기면 이 파일의 내용만 API 호출로 바꾼다. 화면은 여기서 내보내는 함수와 훅만 쓴다.
- * 날짜를 고정해 두어 Figma 시안과 같은 화면이 나오고, 새로고침하면 "확인했어요" 상태가 처음으로 돌아간다.
+ * HuCare 데이터. 화면은 여기서 내보내는 함수와 훅만 쓴다.
+ * 서버 연결됨: 알림 목록·확인, 대상자 정보(이름·연락처·가족).
+ * 아직 목업(손대지 않음): 홈 화면(guardian·subject·건강 수치)과 기록 화면.
+ * 토큰이 없으면 서버를 부르지 않고 빈 상태로 둔다.
  */
 
-/** 시연 기준 시각 (Figma 시안의 "오늘" = 2026-10-26) */
+/** 시연 기준 시각 (Figma 시안의 "오늘" = 2026-10-26). 홈·기록 목업용 */
 export const NOW = new Date(2026, 9, 26, 22, 30);
 
+/** 홈 목업용 보호자 (홈 화면 전용. 알림 확인 표시는 서버 이름을 쓴다) */
 export const guardian = { fullName: '김영희', givenName: '영희' };
 
+/** 홈·기록 목업용 대상자. 설정·알림 화면은 useSubjectInfo 를 쓴다. */
 export const subject = {
   relation: '어머니',
   phone: '010-0000-0000',
@@ -56,26 +59,8 @@ const EVENT_COPY: Record<EventKind, { title: string; body: (event: CareEvent) =>
 export const eventTitle = (event: CareEvent) => EVENT_COPY[event.kind].title;
 export const eventBody = (event: CareEvent) => EVENT_COPY[event.kind].body(event);
 
-const initialEvents: CareEvent[] = [
-  { id: 'fall-1026', kind: 'fall', at: new Date(2026, 9, 26, 19, 30), heartRate: 48 },
-  {
-    id: 'inactive-1026',
-    kind: 'inactive',
-    at: new Date(2026, 9, 26, 17, 54),
-    heartRate: 70,
-    ack: { by: guardian.fullName, at: new Date(2026, 9, 26, 18, 18) },
-  },
-  {
-    id: 'device-1025',
-    kind: 'deviceOff',
-    at: new Date(2026, 9, 25, 16, 54),
-    ack: { by: guardian.fullName, at: new Date(2026, 9, 25, 17, 1) },
-  },
-];
-
-// 토큰이 있으면 서버가 진실의 원천이므로 목업을 보여 주지 않는다 (불러오기 전·실패·대상 없음은 빈 목록).
-const seedEvents = apiEnabled ? [] : initialEvents;
-let events = seedEvents;
+// 불러오기 전·실패·대상 없음은 빈 목록이다.
+let events: CareEvent[] = [];
 const listeners = new Set<() => void>();
 
 function subscribe(listener: () => void) {
@@ -87,29 +72,33 @@ function subscribe(listener: () => void) {
 
 const emit = () => listeners.forEach((listener) => listener());
 
-// ponytail: 아래 응답 필드명은 추측이다 (Swagger 에 응답 스키마가 없음). 실제 응답을 보고 이 매퍼만 고친다.
+// 서버 이벤트 type → 앱 종류. 서버가 이 세 값 외의 type 을 줄 수도 있어, 모르는 값은 목록에서 뺀다.
 const KIND_BY_API: Record<string, EventKind> = {
-  FALL: 'fall',
-  FALL_DETECTED: 'fall',
-  INACTIVITY: 'inactive',
-  INACTIVE: 'inactive',
-  NO_MOVEMENT: 'inactive',
-  DEVICE_OFFLINE: 'deviceOff',
-  DEVICE_OFF: 'deviceOff',
+  fall: 'fall',
+  inactivity: 'inactive',
+  device_offline: 'deviceOff',
 };
 
-function toCareEvent(raw: any): CareEvent {
-  const ackAt = raw.acknowledgedAt ?? raw.ackAt;
+type RemoteEvent = {
+  id: string;
+  type: string;
+  occurred_at: string;
+  metrics?: Record<string, unknown> | null;
+  acknowledgement: { user_name: string; acknowledged_at: string } | null;
+};
+
+function toCareEvent(raw: RemoteEvent): CareEvent | null {
+  const kind = KIND_BY_API[raw.type];
+  if (!kind) return null;
+  // ponytail: metrics 는 기기가 보낸 JSON 그대로라 심박 키 이름이 고정이 아니다. 흔한 이름만 시도하고, 실제 센서 메시지를 보고 확정한다.
+  const bpm = Number(raw.metrics?.heart_rate ?? raw.metrics?.heartRate ?? raw.metrics?.hr);
   return {
-    id: String(raw.id),
-    kind: KIND_BY_API[String(raw.type ?? raw.eventType ?? raw.kind).toUpperCase()] ?? 'inactive',
-    at: new Date(raw.occurredAt ?? raw.detectedAt ?? raw.createdAt),
-    heartRate: raw.heartRate ?? raw.metrics?.heartRate,
-    ack: ackAt
-      ? {
-          by: raw.acknowledgedByName ?? raw.acknowledgedBy?.displayName ?? '보호자',
-          at: new Date(ackAt),
-        }
+    id: raw.id,
+    kind,
+    at: new Date(raw.occurred_at),
+    heartRate: Number.isFinite(bpm) ? bpm : undefined,
+    ack: raw.acknowledgement
+      ? { by: raw.acknowledgement.user_name, at: new Date(raw.acknowledgement.acknowledged_at) }
       : undefined,
   };
 }
@@ -120,11 +109,15 @@ let loadStarted = false;
 async function loadEvents() {
   if (loadStarted || !apiEnabled) return;
   loadStarted = true;
+  void loadGuardian(); // 확인 표시에 쓸 내 이름
   try {
     const subjectId = await getSubjectId();
     if (!subjectId) return;
-    const res = await api<{ items?: unknown[] }>(`/guardian/events?subject_id=${subjectId}`);
-    events = (res.items ?? []).map(toCareEvent).sort((a, b) => b.at.getTime() - a.at.getTime());
+    const res = await api<{ items?: RemoteEvent[] }>(`/guardian/events?subject_id=${subjectId}`);
+    events = (res.items ?? [])
+      .map(toCareEvent)
+      .filter((event): event is CareEvent => !!event)
+      .sort((a, b) => b.at.getTime() - a.at.getTime());
     emit();
   } catch (error) {
     loadStarted = false;
@@ -140,18 +133,135 @@ export function useEvents() {
   return useSyncExternalStore(
     subscribe,
     () => events,
-    () => seedEvents,
+    () => events,
   );
 }
 
-/** 보호자가 알림을 확인했다고 기록한다. 이미 확인한 알림은 처음 기록을 유지한다. */
-export function acknowledgeEvent(id: string) {
+// ---- 보호자 (로그인한 사용자) ----
+let guardianName = '';
+let guardianStarted = false;
+
+async function loadGuardian() {
+  if (guardianStarted || !apiEnabled) return;
+  guardianStarted = true;
+  try {
+    guardianName = (await api<{ name: string }>('/guardian/me')).name;
+    emit();
+  } catch (error) {
+    guardianStarted = false;
+    console.warn('보호자 정보를 불러오지 못했어요', error);
+  }
+}
+
+/** 보호자가 알림을 확인했다고 기록한다. 화면을 먼저 바꾸고, 서버가 실패하면 되돌린다. */
+export async function acknowledgeEvent(id: string) {
+  if (!apiEnabled) return;
+  const before = events;
   events = events.map((event) =>
-    event.id === id && !event.ack ? { ...event, ack: { by: guardian.fullName, at: NOW } } : event,
+    event.id === id && !event.ack ? { ...event, ack: { by: guardianName, at: new Date() } } : event,
   );
   emit();
-  if (apiEnabled)
-    api(`/events/${id}/ack`, { method: 'POST' }).catch(() => console.warn('확인 처리 실패', id));
+  try {
+    // 서버가 처음 확인한 사람·시각을 돌려준다. 이미 확인된 알림이면 그 기록을 그대로 쓴다.
+    const confirmed = toCareEvent(await api<RemoteEvent>(`/events/${id}/ack`, { method: 'POST' }));
+    if (confirmed) events = events.map((event) => (event.id === id ? confirmed : event));
+  } catch {
+    console.warn('확인 처리 실패', id);
+    events = before;
+  }
+  emit();
+}
+
+// ---- 대상자 정보 (설정 화면): 연락처 · 가족 ----
+type Contact = { id: string; kind: string; phone: string; version: number };
+type RemoteInfo = { name: string; contacts: Contact[]; family: string[] };
+
+let remoteInfo: RemoteInfo | null = null;
+let infoLoad: Promise<void> | null = null;
+
+function loadSubjectInfo() {
+  if (!apiEnabled) return Promise.resolve();
+  infoLoad ??= fetchSubjectInfo();
+  return infoLoad;
+}
+
+async function fetchSubjectInfo() {
+  try {
+    const id = await getSubjectId();
+    if (!id) return;
+    const base = `/guardian/subjects/${id}`;
+    const [info, contacts, members] = await Promise.all([
+      api<{ name: string }>(base),
+      api<{ items: Contact[] }>(`${base}/contacts`),
+      api<{ items: { name: string }[] }>(`${base}/members`),
+    ]);
+    remoteInfo = {
+      name: info.name,
+      contacts: contacts.items,
+      family: members.items.map((member) => member.name),
+    };
+    emit();
+  } catch (error) {
+    infoLoad = null;
+    console.warn('대상자 정보를 불러오지 못했어요', error);
+  }
+}
+
+const phoneOf = (info: RemoteInfo | null, kind: string) =>
+  info?.contacts.find((c) => c.kind === kind)?.phone ?? '';
+
+/** 대상자 대표 전화번호. 연락처가 없으면 빈 문자열. */
+export async function subjectPhone() {
+  await loadSubjectInfo();
+  return phoneOf(remoteInfo, 'subject');
+}
+
+/**
+ * 설정·알림 화면의 대상자 정보.
+ * 전화번호·돌봄센터 연락처는 연락처 API 로 저장한다. 가족은 읽기만 한다 (추가는 초대 API 라 아직 미연결).
+ */
+export function useSubjectInfo() {
+  useEffect(() => {
+    void loadSubjectInfo();
+  }, []);
+  const remote = useSyncExternalStore(
+    subscribe,
+    () => remoteInfo,
+    () => null,
+  );
+  return {
+    name: remote?.name ?? '',
+    phone: phoneOf(remote, 'subject'),
+    family: remote?.family ?? [],
+    careCenterPhone: phoneOf(remote, 'care_center'),
+  };
+}
+
+/** 전화번호·돌봄센터 연락처 저장 */
+export async function saveSubjectInfo(patch: { phone?: string; careCenterPhone?: string }) {
+  if (patch.phone) await saveContact('subject', patch.phone);
+  if (patch.careCenterPhone) await saveContact('care_center', patch.careCenterPhone);
+}
+
+async function saveContact(kind: 'subject' | 'care_center', phone: string) {
+  const id = await getSubjectId();
+  if (!id || !remoteInfo) return;
+  const path = `/guardian/subjects/${id}/contacts`;
+  const found = remoteInfo.contacts.find((c) => c.kind === kind);
+  const saved = found
+    ? await api<Contact>(`${path}/${found.id}`, {
+        method: 'PATCH',
+        body: { version: found.version, phone },
+      })
+    : await api<Contact>(path, {
+        method: 'POST',
+        body: { kind, name: kind === 'subject' ? remoteInfo.name : '돌봄센터', phone },
+      });
+  remoteInfo = {
+    ...remoteInfo,
+    contacts: [...remoteInfo.contacts.filter((c) => c.kind !== kind), saved],
+  };
+  emit();
 }
 
 export type Measurement = {
