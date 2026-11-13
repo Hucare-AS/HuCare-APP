@@ -1,8 +1,9 @@
 import { router } from 'expo-router';
-import type { PropsWithChildren, ReactNode } from 'react';
-import { View } from 'react-native';
+import { useState, type PropsWithChildren, type ReactNode } from 'react';
+import { Pressable, View } from 'react-native';
 
 import { LoadState } from '@/components/load-state';
+import { SubjectSheet, type SubjectField, type SubjectInfo } from '@/components/subject-sheet';
 import { TabScreen } from '@/components/tab-screen';
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
@@ -51,11 +52,16 @@ type RowProps = {
   right?: ReactNode;
   /** 드롭다운이 열리면 아래 행 위로 올라오도록 */
   raised?: boolean;
+  onPress?: () => void;
 };
 
-function Row({ title, detail, detailClassName, right, raised }: RowProps) {
+function Row({ title, detail, detailClassName, right, raised, onPress }: RowProps) {
   return (
-    <View className={cn('min-h-[50px] flex-row items-center justify-between', raised && 'z-10')}>
+    <Pressable
+      disabled={!onPress}
+      onPress={onPress}
+      className={cn('min-h-[50px] flex-row items-center justify-between', raised && 'z-10')}
+    >
       <View className="flex-1 gap-1 pr-3">
         <Text className="text-[15px] font-semibold leading-[22px] tracking-[-0.375px]">
           {title}
@@ -63,7 +69,7 @@ function Row({ title, detail, detailClassName, right, raised }: RowProps) {
         {detail ? <Text className={cn('leading-[21px]', detailClassName)}>{detail}</Text> : null}
       </View>
       {right}
-    </View>
+    </Pressable>
   );
 }
 
@@ -131,8 +137,20 @@ function NotificationSection() {
 function ProfileSection() {
   const resource = useProfile();
   const profile = resource.data;
+  // ponytail: 프로필 수정 API가 없어 화면 state로만 덮어쓴다 — API 생기면 care.ts update 함수로 교체
+  const [edits, setEdits] = useState<Partial<SubjectInfo>>({});
+  const [field, setField] = useState<SubjectField | null>(null);
 
   if (!profile) return <LoadState resource={resource} className="py-4" />;
+
+  const info: SubjectInfo = {
+    phone: profile.phone ?? '',
+    place: profile.place ?? '',
+    family: profile.family,
+    careCenterPhone: profile.careCenterPhone ?? '',
+    ...edits,
+  };
+  const open = (f: SubjectField) => () => setField(f);
 
   return (
     <View className="gap-1">
@@ -142,15 +160,38 @@ function ProfileSection() {
         </Text>
       </View>
       <View className="gap-4">
-        <Row title="전화번호" detail={profile.phone ?? NOT_SET} right={chevron} />
-        <Row title="기기 설치 장소" detail={profile.place ?? NOT_SET} right={chevron} />
+        <Row
+          title="전화번호"
+          detail={info.phone || NOT_SET}
+          right={chevron}
+          onPress={open('phone')}
+        />
+        <Row
+          title="기기 설치 장소"
+          detail={info.place || NOT_SET}
+          right={chevron}
+          onPress={open('place')}
+        />
         <Row
           title="함께 보는 가족"
-          detail={profile.family.length ? profile.family.join(', ') : NOT_SET}
+          detail={info.family.length ? info.family.join(', ') : NOT_SET}
           right={chevron}
+          onPress={open('family')}
         />
-        <Row title="돌봄센터 연락처" detail={profile.careCenterPhone ?? NOT_SET} right={chevron} />
+        <Row
+          title="돌봄센터 연락처"
+          detail={info.careCenterPhone || NOT_SET}
+          right={chevron}
+          onPress={open('careCenterPhone')}
+        />
       </View>
+      <SubjectSheet
+        title={profile.subjectLabel}
+        field={field}
+        info={info}
+        onSave={(patch) => setEdits((prev) => ({ ...prev, ...patch }))}
+        onClose={() => setField(null)}
+      />
     </View>
   );
 }
