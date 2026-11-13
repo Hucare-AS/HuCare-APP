@@ -38,6 +38,7 @@ export default defineConfig({
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
-    env: { CI: '1' },
+    // .env.local 의 API 주소를 비워 목업 데이터로 테스트한다
+    env: { CI: '1', EXPO_PUBLIC_API_URL: '' },
   },
 });

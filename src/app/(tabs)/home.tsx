@@ -4,13 +4,24 @@ import { useCallback, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 
 import { CareBoard } from '@/components/care-board';
+import { LoadState } from '@/components/load-state';
 import { DetailMetricsRow, VitalsRow } from '@/components/metrics';
 import { Screen } from '@/components/screen';
 import { useTabBarSpace } from '@/components/tab-screen';
 import { Button } from '@/components/ui/button';
 import { Icon, type IconName } from '@/components/ui/icon';
 import { Text } from '@/components/ui/text';
-import { getTodayRecord, todayTimeline, useEvents, type TimelineBar } from '@/lib/care';
+import {
+  formatDate,
+  formatTime,
+  isSameDay,
+  now,
+  todayKey,
+  useDayRecord,
+  useHome,
+  useProfile,
+  type TimelineBar,
+} from '@/lib/care';
 import { cn } from '@/lib/cn';
 
 const SHORTCUTS: { label: string; icon: IconName; width: number; height: number; href: Href }[] = [
@@ -38,12 +49,13 @@ function LegendDot({ label, className }: { label: string; className: string }) {
 }
 
 export default function HomeScreen() {
-  const events = useEvents();
+  const homeResource = useHome();
+  const home = homeResource.data;
+  const phone = useProfile().data?.phone ?? null;
+  const timeline = useDayRecord(todayKey()).data?.timeline ?? [];
   const [expanded, setExpanded] = useState(false);
   const bottomSpace = useTabBarSpace();
-  const today = getTodayRecord();
-  const latest = today.measurements[today.measurements.length - 1];
-  const alert = events.find((event) => !event.ack) ?? null;
+  const latest = home?.latest ?? null;
 
   // 보드가 상태바까지 덮으므로 홈에서만 상태바 글자를 흰색으로 둔다
   useFocusEffect(
@@ -53,27 +65,48 @@ export default function HomeScreen() {
     }, []),
   );
 
+  if (!home) {
+    return (
+      <Screen>
+        <LoadState resource={homeResource} className="flex-1 justify-center" />
+      </Screen>
+    );
+  }
+
   return (
     <Screen top={false}>
       <ScrollView contentContainerStyle={{ paddingBottom: bottomSpace }}>
-        <CareBoard alert={alert} />
+        <CareBoard home={home} phone={phone} />
 
         <View className="gap-6 px-6 pt-8">
           <View>
             <Text variant="section" className="text-black">
               오늘 건강
             </Text>
-            <View className="gap-2">
-              <VitalsRow measurement={latest} />
-              {expanded ? <DetailMetricsRow /> : null}
-            </View>
-            <Button
-              label={expanded ? '접기' : '자세한 값 더보기'}
-              variant="ghost"
-              accessibilityState={{ expanded }}
-              onPress={() => setExpanded(!expanded)}
-              className="mt-4"
-            />
+            {latest ? (
+              <>
+                <View className="gap-2">
+                  <VitalsRow measurement={latest} />
+                  {expanded ? <DetailMetricsRow measurement={latest} /> : null}
+                </View>
+                {isSameDay(latest.at, now()) ? null : (
+                  <Text variant="note" className="mt-2">
+                    마지막 확인: {formatDate(latest.at)} {formatTime(latest.at)}
+                  </Text>
+                )}
+                <Button
+                  label={expanded ? '접기' : '자세한 값 더보기'}
+                  variant="ghost"
+                  accessibilityState={{ expanded }}
+                  onPress={() => setExpanded(!expanded)}
+                  className="mt-4"
+                />
+              </>
+            ) : (
+              <Text variant="note" className="mt-2">
+                아직 확인된 건강 기록이 없어요.
+              </Text>
+            )}
           </View>
 
           <View className="gap-1">
@@ -105,7 +138,7 @@ export default function HomeScreen() {
             <View className="gap-2">
               <View className="h-[121px] rounded-lg bg-white px-[11px] pt-[10px]">
                 <View className="h-[86px] flex-row items-end justify-center gap-px">
-                  {todayTimeline.map((bar, index) => (
+                  {timeline.map((bar, index) => (
                     <View
                       key={index}
                       className={cn('w-3 rounded', BAR_TONES[bar.tone])}

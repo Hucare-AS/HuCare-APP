@@ -6,17 +6,17 @@ import { Icon } from '@/components/ui/icon';
 import { LinearGradient } from '@/components/ui/linear-gradient';
 import { Text } from '@/components/ui/text';
 import { useScreenInsets } from '@/hooks/use-screen-insets';
-import { callSubject } from '@/lib/call';
+import { callPhone } from '@/lib/call';
 import {
   acknowledgeEvent,
-  eventTitle,
   formatDateWithWeekday,
   formatElapsed,
   formatTime,
-  guardian,
-  NOW,
-  subject,
-  type CareEvent,
+  givenName,
+  now,
+  withTopic,
+  type HomeSummary,
+  type Presence,
 } from '@/lib/care';
 import { cn } from '@/lib/cn';
 
@@ -36,13 +36,37 @@ const GRADIENTS = {
   },
 } as const;
 
+const PRESENCE_COPY: Record<Presence, string> = {
+  present: '지금 계세요',
+  measuring: '지금 계세요・건강 확인중',
+  absent: '지금 안 계세요',
+  difficult: '지금 확인이 어려워요',
+  unknown: '지금 상태를 알 수 없어요',
+};
+
+function headline({ subjectLabel, status, statusMessage, primaryEvent }: HomeSummary) {
+  if (primaryEvent) return `${withTopic(subjectLabel)} 확인이 필요해요`;
+  if (status === 'ok') return `${withTopic(subjectLabel)} 오늘도 평소와 같으세요`;
+  return statusMessage;
+}
+
+type CareBoardProps = {
+  home: HomeSummary;
+  /** 대상자 전화번호. 없으면 전화 걸기 버튼을 누를 수 없다 */
+  phone: string | null;
+};
+
 /**
  * 홈 상단 알림보드.
  * 확인이 필요한 알림이 있으면 주황(818:608), 없으면 파랑(818:1104) 보드를 보여준다.
  */
-export function CareBoard({ alert }: { alert: CareEvent | null }) {
+export function CareBoard({ home, phone }: CareBoardProps) {
   const insets = useScreenInsets();
+  const alert = home.primaryEvent;
   const bellIcon = alert ? 'tabAlerts' : 'bellHome';
+  const greeting = home.guardianName
+    ? `안녕하세요, ${givenName(home.guardianName)}님`
+    : '안녕하세요';
 
   return (
     <LinearGradient
@@ -66,11 +90,12 @@ export function CareBoard({ alert }: { alert: CareEvent | null }) {
 
       <View className={cn('mt-5', alert ? 'pl-[26px]' : 'pl-6')}>
         <Text className="text-[16px] leading-[21px] tracking-[-0.4px] text-white">
-          {formatDateWithWeekday(NOW)}
+          {formatDateWithWeekday(now())}
         </Text>
         <Text className="mt-[5px] text-[24px] font-bold leading-[34px] tracking-[-0.6px] text-white">
-          안녕하세요, {guardian.givenName}님{'\n'}
-          {subject.relation}는 {alert ? '확인이 필요해요' : '오늘도 평소와 같으세요'}
+          {greeting}
+          {'\n'}
+          {headline(home)}
         </Text>
       </View>
 
@@ -85,10 +110,10 @@ export function CareBoard({ alert }: { alert: CareEvent | null }) {
           <Icon name="profile" size={40} />
           <View>
             <View className="flex-row gap-3">
-              <Text className="font-bold text-black">{subject.relation}</Text>
-              <Text className="font-bold text-black">{subject.place}</Text>
+              <Text className="font-bold text-black">{home.subjectLabel}</Text>
+              {home.place ? <Text className="font-bold text-black">{home.place}</Text> : null}
             </View>
-            <Text className="mt-[2px] font-light text-black">지금 계세요・건강 확인중</Text>
+            <Text className="mt-[2px] font-light text-black">{PRESENCE_COPY[home.presence]}</Text>
           </View>
         </View>
         {alert ? (
@@ -110,7 +135,7 @@ export function CareBoard({ alert }: { alert: CareEvent | null }) {
 
       {alert ? (
         <View className="mt-6 pl-[26px] pr-6">
-          <Text className="font-semibold text-white">{eventTitle(alert)}</Text>
+          <Text className="font-semibold text-white">{alert.title}</Text>
           <Text className="font-light text-white">
             {formatTime(alert.at)}・{formatElapsed(alert.at)}
           </Text>
@@ -119,13 +144,14 @@ export function CareBoard({ alert }: { alert: CareEvent | null }) {
               label="전화 걸기"
               variant="white"
               icon={<Icon name="phoneOrange" style={{ transform: [{ scaleX: -1 }] }} />}
-              onPress={callSubject}
-              className="flex-1"
+              disabled={!phone}
+              onPress={() => callPhone(phone)}
+              className={cn('flex-1', !phone && 'opacity-50')}
             />
             <Button
               label="확인했어요"
               variant="whiteSoft"
-              onPress={() => acknowledgeEvent(alert.id)}
+              onPress={() => acknowledgeEvent(alert.id).catch(() => {})}
               className="flex-1"
             />
           </View>
