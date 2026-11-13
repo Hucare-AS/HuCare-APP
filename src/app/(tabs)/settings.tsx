@@ -13,6 +13,7 @@ import { Toggle } from '@/components/ui/toggle';
 import { isApiMode } from '@/lib/api';
 import { logout, useAuth } from '@/lib/auth';
 import {
+  saveContacts,
   updateNotificationPrefs,
   useNotificationPrefs,
   useProfile,
@@ -137,7 +138,7 @@ function NotificationSection() {
 function ProfileSection() {
   const resource = useProfile();
   const profile = resource.data;
-  // ponytail: 프로필 수정 API가 없어 화면 state로만 덮어쓴다 — API 생기면 care.ts update 함수로 교체
+  // ponytail: 설치 장소·가족은 수정 API 미확인이라 화면 state로만 덮어쓴다. 전화번호·돌봄센터 연락처는 서버에 저장.
   const [edits, setEdits] = useState<Partial<SubjectInfo>>({});
   const [field, setField] = useState<SubjectField | null>(null);
 
@@ -189,7 +190,19 @@ function ProfileSection() {
         title={profile.subjectLabel}
         field={field}
         info={info}
-        onSave={(patch) => setEdits((prev) => ({ ...prev, ...patch }))}
+        onSave={(patch) => {
+          const { place, family } = patch;
+          if (place !== undefined || family !== undefined) {
+            setEdits((prev) => ({
+              ...prev,
+              ...(place !== undefined && { place }),
+              ...(family && { family }),
+            }));
+          }
+          saveContacts({ phone: patch.phone, careCenterPhone: patch.careCenterPhone }).catch(
+            () => {},
+          );
+        }}
         onClose={() => setField(null)}
       />
     </View>

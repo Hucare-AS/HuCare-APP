@@ -10,6 +10,7 @@ import {
   type CareSource,
   type DayRecord,
   type DayStatus,
+  type Profile,
   type Measurement,
   type MetricKey,
   type NotificationPrefs,
@@ -201,6 +202,14 @@ function loadPrefs(): NotificationPrefs {
 
 let prefs: NotificationPrefs | null = null;
 
+let profile: Profile = {
+  subjectLabel: '어머니',
+  phone: '010-0000-0000',
+  place: '거실',
+  family: ['나', '동생'],
+  careCenterPhone: '011-0000-0000',
+};
+
 /** 화면이 로딩 상태를 한 번 거치도록 비동기로 돌려준다 */
 const resolve = <T>(value: T) => Promise.resolve(value);
 
@@ -246,14 +255,16 @@ export const mockSource: CareSource = {
     });
   },
 
-  profile: () =>
-    resolve({
-      subjectLabel: '어머니',
-      phone: '010-0000-0000',
-      place: '거실',
-      family: ['나', '동생'],
-      careCenterPhone: '011-0000-0000',
-    }),
+  profile: () => resolve(profile),
+
+  saveContacts(patch) {
+    profile = {
+      ...profile,
+      ...(patch.phone && { phone: patch.phone }),
+      ...(patch.careCenterPhone && { careCenterPhone: patch.careCenterPhone }),
+    };
+    return resolve(undefined);
+  },
 
   notificationPrefs: () => resolve((prefs ??= loadPrefs())),
 

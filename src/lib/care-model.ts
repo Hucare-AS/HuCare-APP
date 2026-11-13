@@ -101,6 +101,8 @@ export class NoSubjectError extends Error {
   }
 }
 
+export type ContactsPatch = { phone?: string; careCenterPhone?: string };
+
 export type CareSource = {
   /** 화면의 "지금". 목업은 Figma 시안 시각으로 고정돼 있다 */
   now(): Date;
@@ -113,6 +115,8 @@ export type CareSource = {
   notificationPrefs(): Promise<NotificationPrefs>;
   updateNotificationPrefs(patch: Partial<NotificationPrefs>): Promise<NotificationPrefs>;
   acknowledge(id: string): Promise<CareEvent>;
+  /** 대상자 전화번호·돌봄센터 연락처 저장 */
+  saveContacts(patch: ContactsPatch): Promise<void>;
   /** 로그아웃 시 대상자 등 기억해 둔 값을 버린다 */
   reset(): void;
 };

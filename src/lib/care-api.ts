@@ -1,4 +1,4 @@
-import { ApiError } from '@/lib/api';
+import { ApiError, idempotencyKey } from '@/lib/api';
 import { authedRequest, currentUser } from '@/lib/auth';
 import {
   METRIC_KEYS,
@@ -8,6 +8,7 @@ import {
   type Assessment,
   type CareEvent,
   type CareSource,
+  type ContactsPatch,
   type DayRecord,
   type DayStatus,
   type HomeStatus,
@@ -86,7 +87,13 @@ type ApiCalendar = {
   days: { date: string; status: 'ok' | 'alert' | 'unknown' | 'future' }[];
 };
 
-type ApiContact = { kind: 'subject' | 'care_center' | 'family'; name: string; phone: string };
+type ApiContact = {
+  id: string;
+  kind: 'subject' | 'care_center' | 'family';
+  name: string;
+  phone: string;
+  version: number;
+};
 type ApiMember = { user_id: string; name: string };
 
 type ApiPrefs = {
@@ -226,6 +233,26 @@ async function patchPrefs(patch: Partial<NotificationPrefs>) {
   return toPrefs(raw);
 }
 
+/** 연락처가 있으면 version 을 실어 수정하고, 없으면 새로 만든다 */
+async function saveContact(kind: 'subject' | 'care_center', phone: string) {
+  const target = await subject();
+  const path = `/guardian/subjects/${target.id}/contacts`;
+  const { items } = await authedRequest<{ items: ApiContact[] }>(path);
+  const found = items.find((contact) => contact.kind === kind);
+  if (found) {
+    await authedRequest(`${path}/${found.id}`, {
+      method: 'PATCH',
+      body: { version: found.version, phone },
+    });
+  } else {
+    await authedRequest(path, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey() },
+      body: { kind, name: kind === 'subject' ? target.name : '돌봄센터', phone },
+    });
+  }
+}
+
 export const apiSource: CareSource = {
   now: () => new Date(),
 
@@ -332,6 +359,11 @@ export const apiSource: CareSource = {
 
   async acknowledge(id) {
     return toEvent(await authedRequest<ApiEvent>(`/events/${id}/ack`, { method: 'POST' }));
+  },
+
+  async saveContacts(patch: ContactsPatch) {
+    if (patch.phone) await saveContact('subject', patch.phone);
+    if (patch.careCenterPhone) await saveContact('care_center', patch.careCenterPhone);
   },
 
   reset() {

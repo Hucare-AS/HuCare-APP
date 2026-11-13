@@ -4,7 +4,13 @@ import { isApiMode } from '@/lib/api';
 import { onSignOut } from '@/lib/auth';
 import { apiSource } from '@/lib/care-api';
 import { mockSource } from '@/lib/care-mock';
-import { dayKey, type CareEvent, type CareSource, type NotificationPrefs } from '@/lib/care-model';
+import {
+  dayKey,
+  type CareEvent,
+  type CareSource,
+  type ContactsPatch,
+  type NotificationPrefs,
+} from '@/lib/care-model';
 import { clearResources, invalidate, mutate, useResource } from '@/lib/resource';
 
 /**
@@ -68,6 +74,12 @@ export async function acknowledgeEvent(id: string) {
   );
   invalidate((key) => key !== 'events' && key !== 'prefs' && key !== 'profile');
   return event;
+}
+
+/** 전화번호·돌봄센터 연락처를 저장하고 프로필을 다시 불러온다 */
+export async function saveContacts(patch: ContactsPatch) {
+  await source.saveContacts(patch);
+  invalidate((key) => key === 'profile');
 }
 
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
