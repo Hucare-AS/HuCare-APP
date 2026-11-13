@@ -1,6 +1,7 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { Pressable, ScrollView, View } from 'react-native';
 
+import { LoadState } from '@/components/load-state';
 import { MeasurementBlock, SummaryCard } from '@/components/records';
 import { Screen } from '@/components/screen';
 import { Icon } from '@/components/ui/icon';
@@ -9,15 +10,12 @@ import { useScreenInsets } from '@/hooks/use-screen-insets';
 import {
   average,
   formatFullDate,
-  getDayRecordByKey,
-  recordDayKeys,
+  metricValues,
+  parseDayKey,
+  useDayRecord,
   type DayRecord,
   type DayStatus,
 } from '@/lib/care';
-
-export function generateStaticParams() {
-  return recordDayKeys.map((date) => ({ date }));
-}
 
 const DAY_TITLE: Record<DayStatus, string> = {
   normal: '이 날은 평소와 같으셨어요',
@@ -25,18 +23,29 @@ const DAY_TITLE: Record<DayStatus, string> = {
   unknown: '이 날은 확인하지 못했어요',
 };
 
-function summaryDetail({ measurements }: DayRecord) {
-  if (!measurements.length) return '확인된 기록이 없어요';
-  const heart = average(measurements.map((row) => row.heartRate));
-  const oxygen = average(measurements.map((row) => row.oxygen));
-  return `${measurements.length}번 확인 · 심박수 평균 ${heart} · 산소 ${oxygen}%`;
+function summaryDetail({ measurementCount, measurements }: DayRecord) {
+  if (!measurementCount) return '확인된 기록이 없어요';
+  const heart = average(metricValues(measurements, 'hr'));
+  const oxygen = average(metricValues(measurements, 'spo2'));
+  return [
+    `${measurementCount}번 확인`,
+    heart !== null ? `심박수 평균 ${heart}` : null,
+    oxygen !== null ? `산소 ${oxygen}%` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
 
-/** 날짜별 기록 (Figma 799:1159) */
+/**
+ * 날짜별 기록 (Figma 799:1159). 주소: /records/day?date=2026-10-14
+ * 정적 배포에서도 날짜마다 HTML 을 만들 필요가 없도록 날짜를 쿼리로 받는다.
+ */
 export default function DayRecordScreen() {
-  const { date } = useLocalSearchParams<{ date: string }>();
+  const { date } = useLocalSearchParams<{ date?: string }>();
   const insets = useScreenInsets();
-  const record = getDayRecordByKey(date);
+  const valid = parseDayKey(date) !== null;
+  const resource = useDayRecord(valid ? date! : null);
+  const record = resource.data;
 
   return (
     <Screen>
@@ -76,6 +85,9 @@ export default function DayRecordScreen() {
               어르신이 카메라 앞에 계실 때만 확인돼요.
             </Text>
           </View>
+        ) : valid || date === undefined ? (
+          // 정적 HTML 에는 쿼리가 없으므로 하이드레이션이 어긋나지 않게 같은 로딩 화면을 그린다
+          <LoadState resource={resource} />
         ) : (
           <Text className="px-6 pt-1 text-muted">이 날짜의 기록을 찾을 수 없어요.</Text>
         )}

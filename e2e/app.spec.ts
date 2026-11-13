@@ -49,7 +49,7 @@ test('달력에서 날짜를 눌러 그날 기록을 보고 돌아온다', async
   await expect(page.getByText('알림 3건 · 확인 못 한 날 1일')).toBeVisible();
 
   await page.getByRole('button', { name: '10월 14일' }).click();
-  await expect(page).toHaveURL(/\/records\/2026-10-14$/);
+  await expect(page).toHaveURL(/\/records\/day\?date=2026-10-14$/);
   await expect(page.getByText('2026년 10월 14일')).toBeVisible();
   await expect(page.getByText('6번 확인 · 심박수 평균 73 · 산소 96%')).toBeVisible();
   await expect(page.getByRole('tab', { name: '홈' })).toBeHidden();
@@ -59,7 +59,7 @@ test('달력에서 날짜를 눌러 그날 기록을 보고 돌아온다', async
 });
 
 test('날짜 주소로 바로 들어와도 뒤로가기는 이번 달 기록으로 간다', async ({ page }) => {
-  await page.goto('/records/2026-10-14');
+  await page.goto('/records/day?date=2026-10-14');
   await page.getByRole('button', { name: '뒤로가기' }).click();
   await expect(page).toHaveURL(/\/records\/month$/);
 });
