@@ -4,7 +4,6 @@ import { Pressable, TextInput, View } from 'react-native';
 import { BottomSheet } from '@/components/bottom-sheet';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
-import { subject } from '@/lib/care';
 
 export type SubjectInfo = {
   phone: string;
@@ -39,6 +38,7 @@ const TEXT_FIELDS = {
 const PLACEHOLDER = '#767676';
 
 type SubjectSheetProps = {
+  title: string;
   field: SubjectField | null;
   info: SubjectInfo;
   onSave: (patch: Partial<SubjectInfo>) => void;
@@ -46,13 +46,13 @@ type SubjectSheetProps = {
 };
 
 /** 대상자 정보 수정 하단 팝업 (AlertSheet와 같은 껍데기) */
-export function SubjectSheet({ field, info, onSave, onClose }: SubjectSheetProps) {
+export function SubjectSheet({ title, field, info, onSave, onClose }: SubjectSheetProps) {
   return (
     <BottomSheet visible={!!field} onClose={onClose}>
       {field ? (
         <>
           <Text className="text-[24px] font-semibold leading-[34px] tracking-[-0.6px] text-black">
-            {subject.relation}
+            {title}
           </Text>
           {/* key: 항목이 바뀌면 입력 상태 초기화 */}
           {field === 'family' ? (

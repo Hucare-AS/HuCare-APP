@@ -5,16 +5,20 @@ import { View } from 'react-native';
 import { Image } from '@/components/ui/image';
 import { Text } from '@/components/ui/text';
 import { useScreenInsets } from '@/hooks/use-screen-insets';
+import { currentUser } from '@/lib/auth';
 
 const SPLASH_DURATION_MS = 1500;
 const logo = require('@/assets/images/hulab-logo.png');
 
-/** 스플래시 (Figma 786:264). 잠시 보여준 뒤 홈으로 이동한다. */
+/** 스플래시 (Figma 786:264). 잠시 보여준 뒤 로그인돼 있으면 홈, 아니면 로그인으로 이동한다. */
 export default function SplashScreen() {
   const insets = useScreenInsets();
 
   useEffect(() => {
-    const timer = setTimeout(() => router.replace('/home'), SPLASH_DURATION_MS);
+    const timer = setTimeout(
+      () => router.replace(currentUser() ? '/home' : '/login'),
+      SPLASH_DURATION_MS,
+    );
     return () => clearTimeout(timer);
   }, []);
 

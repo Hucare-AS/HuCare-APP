@@ -1,24 +1,34 @@
 import { View } from 'react-native';
 
+import { LoadState } from '@/components/load-state';
 import { MeasurementBlock, RecordTabs, SummaryCard } from '@/components/records';
 import { TabScreen } from '@/components/tab-screen';
 import { Text } from '@/components/ui/text';
-import { getTodayRecord, isSameDay, NOW, useEvents } from '@/lib/care';
+import { todayKey, useDayRecord } from '@/lib/care';
 
 /** 오늘 기록 (Figma 786:455) */
 export default function TodayRecordScreen() {
-  const events = useEvents();
-  const today = getTodayRecord();
-  const alertCount = events.filter((event) => isSameDay(event.at, NOW)).length;
-  const [heartMin, heartMax] = today.heartRange ?? [];
+  const resource = useDayRecord(todayKey());
+  const today = resource.data;
+
+  if (!today) {
+    return (
+      <TabScreen title="기록" subtitle="어르신 건강이 확인된 기록이에요">
+        <RecordTabs active="today" />
+        <LoadState resource={resource} />
+      </TabScreen>
+    );
+  }
+
+  const heart = today.heartRange ? `심박수 ${today.heartRange[0]}~${today.heartRange[1]}` : null;
 
   return (
     <TabScreen title="기록" subtitle="어르신 건강이 확인된 기록이에요">
       <RecordTabs active="today" />
       <View className="mt-4 px-6">
         <SummaryCard
-          title={`오늘 ${today.measurements.length}번 확인했어요`}
-          detail={`알림 ${alertCount}건 · 심박수 ${heartMin}~${heartMax}`}
+          title={`오늘 ${today.measurementCount}번 확인했어요`}
+          detail={[`알림 ${today.eventCount}건`, heart].filter(Boolean).join(' · ')}
         />
         <Text variant="section" className="mt-6 text-black">
           시간별

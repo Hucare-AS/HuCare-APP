@@ -1,23 +1,18 @@
 import { useSyncExternalStore } from 'react';
 import { Platform } from 'react-native';
 
-export type NightAlert = 'as-is' | 'morning';
+/**
+ * 이 기기에만 남겨 두는 화면 설정. (알림 설정은 계정에 저장되므로 care.ts 를 쓴다)
+ * 웹: localStorage. 네이티브: 아직 영속 저장소가 없어 메모리에만 둔다 (앱 재시작 시 초기화).
+ */
 export type Brightness = 'auto' | 'bright' | 'dark';
 
 export type Preferences = {
-  fall: boolean;
-  inactive: boolean;
-  deviceOff: boolean;
-  nightAlert: NightAlert;
   brightness: Brightness;
 };
 
 /** Figma 설정 화면(786:539)의 초기 상태 */
 const DEFAULTS: Preferences = {
-  fall: true,
-  inactive: true,
-  deviceOff: false,
-  nightAlert: 'as-is',
   brightness: 'auto',
 };
 
@@ -35,7 +30,7 @@ function webStorage(): Storage | null {
 function load(): Preferences {
   try {
     const saved = webStorage()?.getItem(STORAGE_KEY);
-    return saved ? { ...DEFAULTS, ...JSON.parse(saved) } : DEFAULTS;
+    return saved ? { ...DEFAULTS, brightness: JSON.parse(saved).brightness ?? 'auto' } : DEFAULTS;
   } catch {
     return DEFAULTS;
   }
@@ -51,10 +46,6 @@ function subscribe(listener: () => void) {
   };
 }
 
-/**
- * 기기에 남겨 두는 설정값.
- * 웹: localStorage. 네이티브: 아직 영속 저장소가 없어 메모리에만 둔다 (앱 재시작 시 초기화).
- */
 export function usePreferences() {
   return useSyncExternalStore(
     subscribe,

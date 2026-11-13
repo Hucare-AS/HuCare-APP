@@ -2,17 +2,17 @@ import { router } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, View } from 'react-native';
 
+import { LoadState } from '@/components/load-state';
 import { RecordTabs, SummaryCard } from '@/components/records';
 import { TabScreen } from '@/components/tab-screen';
 import { Icon } from '@/components/ui/icon';
 import { Text } from '@/components/ui/text';
 import {
   dayKey,
-  getDayRecord,
-  getMonthRecords,
   isSameDay,
-  NOW,
-  useEvents,
+  now,
+  useMonthRecord,
+  type CalendarDay,
   type DayStatus,
 } from '@/lib/care';
 import { cn } from '@/lib/cn';
@@ -42,17 +42,23 @@ function buildWeeks(year: number, month: number) {
   );
 }
 
-function DayCell({ date, month }: { date: Date; month: number }) {
+type DayCellProps = {
+  date: Date;
+  month: number;
+  status: CalendarDay['status'] | undefined;
+};
+
+function DayCell({ date, month, status }: DayCellProps) {
   const inMonth = date.getMonth() === month;
-  const record = inMonth ? getDayRecord(date) : null;
-  const today = isSameDay(date, NOW);
+  const record = inMonth && status && status !== 'none' ? status : null;
+  const today = isSameDay(date, now());
 
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`${date.getMonth() + 1}월 ${date.getDate()}일`}
       disabled={!record}
-      onPress={() => router.push({ pathname: '/records/[date]', params: { date: dayKey(date) } })}
+      onPress={() => router.push({ pathname: '/records/day', params: { date: dayKey(date) } })}
       className={cn(
         'flex-1 items-center justify-center gap-2 border py-[13px] active:opacity-60',
         today ? 'rounded border-[#EDF1FF]' : 'border-transparent bg-white',
@@ -61,24 +67,20 @@ function DayCell({ date, month }: { date: Date; month: number }) {
       <Text className={cn('leading-[17px] tracking-normal', !inMonth && 'text-muted')}>
         {date.getDate()}
       </Text>
-      <View className={cn('size-[5px] rounded-full', record && STATUS_DOT[record.status])} />
+      <View className={cn('size-[5px] rounded-full', record && STATUS_DOT[record])} />
     </Pressable>
   );
 }
 
 /** 이번 달 기록 (Figma 793:919) */
 export default function MonthRecordScreen() {
-  const events = useEvents();
-  const [cursor, setCursor] = useState({ year: NOW.getFullYear(), month: NOW.getMonth() });
+  const today = now();
+  const [cursor, setCursor] = useState({ year: today.getFullYear(), month: today.getMonth() });
   const { year, month } = cursor;
-  const isCurrentMonth = year === NOW.getFullYear() && month === NOW.getMonth();
-
-  const days = getMonthRecords(year, month);
-  const normalDays = days.filter((day) => day.status === 'normal').length;
-  const unknownDays = days.filter((day) => day.status === 'unknown').length;
-  const alertCount = events.filter(
-    ({ at }) => at.getFullYear() === year && at.getMonth() === month,
-  ).length;
+  const isCurrentMonth = year === today.getFullYear() && month === today.getMonth();
+  const resource = useMonthRecord(year, month);
+  const record = resource.data;
+  const statusByDay = new Map(record?.days.map((day) => [dayKey(day.date), day.status]));
   const monthLabel = isCurrentMonth ? '이번 달' : `${month + 1}월`;
 
   const move = (delta: number) => {
@@ -90,10 +92,12 @@ export default function MonthRecordScreen() {
     <TabScreen title="기록" subtitle="어르신 건강이 확인된 기록이에요">
       <RecordTabs active="month" />
       <View className="mt-4 px-6">
-        {days.length ? (
+        {!record ? (
+          <LoadState resource={resource} className="py-6" />
+        ) : record.elapsedDays ? (
           <SummaryCard
-            title={`${monthLabel} ${days.length}일 중 ${normalDays}일은 평소와 같으셨어요`}
-            detail={`알림 ${alertCount}건 · 확인 못 한 날 ${unknownDays}일`}
+            title={`${monthLabel} ${record.elapsedDays}일 중 ${record.usualDays}일은 평소와 같으셨어요`}
+            detail={`알림 ${record.eventCount}건 · 확인 못 한 날 ${record.unknownDays}일`}
           />
         ) : (
           <SummaryCard title={`${monthLabel} 기록이 없어요`} detail="확인된 날이 없어요" />
@@ -129,7 +133,12 @@ export default function MonthRecordScreen() {
           {buildWeeks(year, month).map((week) => (
             <View key={dayKey(week[0])} className="flex-row">
               {week.map((date) => (
-                <DayCell key={dayKey(date)} date={date} month={month} />
+                <DayCell
+                  key={dayKey(date)}
+                  date={date}
+                  month={month}
+                  status={statusByDay.get(dayKey(date))}
+                />
               ))}
             </View>
           ))}
