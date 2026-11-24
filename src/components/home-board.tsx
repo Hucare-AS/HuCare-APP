@@ -165,7 +165,7 @@ function baselineText(baseline: BaselineDelta | undefined) {
 }
 
 /** HC/metric (Figma 961:4313): 값 · 기준선 대비 · 측정 시각과 신뢰도 */
-function VitalCard({ label, metric, unit, icon, valueClassName, baseline, at }: VitalProps) {
+export function VitalCard({ label, metric, unit, icon, valueClassName, baseline, at }: VitalProps) {
   const missing = metric.value === null;
   const delta = missing ? null : baselineText(baseline);
   return (

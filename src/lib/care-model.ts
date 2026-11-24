@@ -256,6 +256,14 @@ export type DeletionKind = 'delete_photos' | 'end_care';
 export type SupportDoc = { id: string; title: string; effectiveAt: Date | null };
 export type SupportArticle = SupportDoc & { body: string };
 
+/** 기기 번호로 기기를 찾지 못함 (05-J) */
+export class DeviceNotFoundError extends Error {
+  constructor() {
+    super('기기를 찾지 못했어요. 기기 번호를 다시 확인해 주세요.');
+    this.name = 'DeviceNotFoundError';
+  }
+}
+
 /** 계정에 연결된 대상자가 없음 */
 export class NoSubjectError extends Error {
   constructor() {
@@ -325,6 +333,10 @@ export type CareSource = {
   /** 고른 대상의 변경을 실시간으로 받는다 (웹 · 백엔드만). 구독을 끊는 함수를 돌려준다 */
   watch?(onChange: (change: LiveChange) => void): () => void;
   media(key: string): Promise<MediaDay>;
+  /** 기기 번호(QR · 직접 입력)로 기기를 등록하고 고른 대상에 연결한 뒤 설치 장소를 저장한다 */
+  registerDevice(code: string, place: string): Promise<DeviceInfo>;
+  /** 기기가 서버에 붙을 때까지 기다린다. 시간 안에 붙지 않으면 false */
+  waitForDevice(deviceId: string, timeoutMs: number): Promise<boolean>;
   /** 고른 대상에 연결된 기기 (지금은 많아야 하나) */
   devices(): Promise<DeviceInfo[]>;
   checkFirmware(deviceId: string): Promise<FirmwareCheck>;

@@ -519,3 +519,18 @@ export async function issueInvite() {
   invites.set(readSelected() ?? '', invite);
   return invite;
 }
+
+/** 대상 등록 2~4단계: 기기를 등록 · 연결하고 서버에 붙을 때까지 기다린다 */
+export async function registerDevice(code: string, place: string) {
+  try {
+    return await source.registerDevice(code, place);
+  } finally {
+    invalidate((key) => key === 'devices' || key === 'home' || key === 'subjects');
+  }
+}
+
+export async function waitForDevice(deviceId: string, timeoutMs = 30_000) {
+  const online = await source.waitForDevice(deviceId, timeoutMs);
+  invalidate((key) => key !== 'prefs');
+  return online;
+}

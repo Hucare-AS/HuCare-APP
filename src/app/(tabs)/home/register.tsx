@@ -41,9 +41,10 @@ export default function RegisterSubjectScreen() {
     setBusy(true);
     setError(null);
     try {
-      await createSubject({ kind, name: name.trim(), info, place: place.trim() || '거실' });
-      // 기기 연결(2~7단계)은 아직 시안이 확정되지 않아, 등록한 대상의 대시보드로 바로 간다
-      router.replace('/home/board');
+      const where = place.trim() || '거실';
+      await createSubject({ kind, name: name.trim(), info, place: where });
+      // 2~7단계: 기기 찾기 · Wi-Fi · 서버 연결 · 설치 가이드 · 동의 · 첫 측정
+      router.replace({ pathname: '/home/connect', params: { place: where } });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '잠시 후 다시 시도해 주세요.');
     } finally {

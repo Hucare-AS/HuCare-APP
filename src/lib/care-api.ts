@@ -25,6 +25,7 @@ import {
   type Presence,
   type TimelineBar,
   type DeviceKind,
+  DeviceNotFoundError,
   type TrendBaseline,
   type TrendBucket,
   type TrendConfidence,
@@ -773,6 +774,54 @@ export const apiSource: CareSource = {
       videos: [],
       videoNote,
     };
+  },
+
+  async registerDevice(code, place) {
+    const target = await subject();
+    let device: ApiDeviceDetail;
+    try {
+      device = await authedRequest<ApiDeviceDetail>('/guardian/devices/register', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey() },
+        body: { registration_code: code.trim() },
+      });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) throw new DeviceNotFoundError();
+      throw error;
+    }
+    const binding = await authedRequest<ApiBinding>(
+      `/guardian/subjects/${target.id}/device-bindings`,
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey() },
+        body: { device_id: device.id },
+      },
+    );
+    const placed = await authedRequest<ApiDeviceDetail>(`/guardian/devices/${device.id}`, {
+      method: 'PATCH',
+      body: { version: device.version, location: place },
+    });
+    listPromise = null;
+    return {
+      id: placed.id,
+      bindingId: binding.id,
+      place: placed.location,
+      kind: null,
+      model: placed.model,
+      firmware: placed.firmware_version,
+      connection: placed.connection_state,
+      network: null,
+    };
+  },
+
+  async waitForDevice(deviceId, timeoutMs) {
+    const until = Date.now() + timeoutMs;
+    while (Date.now() < until) {
+      const device = await authedRequest<ApiDeviceDetail>(`/guardian/devices/${deviceId}`);
+      if (device.connection_state === 'online') return true;
+      await new Promise((done) => setTimeout(done, 2000));
+    }
+    return false;
   },
 
   async devices() {

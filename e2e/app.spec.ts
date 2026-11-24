@@ -31,7 +31,7 @@ test('대상 수정에서 다른 대상을 고르고 전체 대상 홈으로 돌
   await expect(page.getByText('돌봄 대상 3명')).toBeVisible();
 });
 
-test('새 대상을 등록하면 그 대상의 대시보드가 열린다', async ({ page }) => {
+test('새 대상을 등록하고 기기를 연결하면 첫 측정이 보인다', async ({ page }) => {
   await page.goto('/home');
   await page.getByRole('button', { name: '대상 추가' }).click();
   await expect(page.getByText('1 / 7 · 대상 등록')).toBeVisible();
@@ -43,8 +43,39 @@ test('새 대상을 등록하면 그 대상의 대시보드가 열린다', async
   await page.getByRole('button', { name: '3~6세' }).click();
   await page.getByRole('button', { name: '기기 연결하기' }).click();
 
+  await expect(page.getByText('2 / 7 · Bluetooth 연결')).toBeVisible();
+  await page.getByRole('button', { name: '이 기기 연결' }).click();
+  await expect(page.getByText('3 / 7 · 네트워크 설정')).toBeVisible();
+  await page.getByRole('textbox', { name: '비밀번호' }).fill('test-wifi');
+  await page.getByRole('button', { name: '연결하기' }).click();
+
+  await expect(page.getByText('5 / 7 · 모델별 설치 가이드')).toBeVisible();
+  await page.getByRole('button', { name: '설치 확인 완료' }).click();
+  await page.getByRole('button', { name: '동의하고 첫 측정' }).click();
+
+  await expect(page.getByText('첫 측정을 확인했어요')).toBeVisible();
+  await expect(page.getByText('하늘의 기기가 연결됐어요')).toBeVisible();
+  await expect(page.getByText('기준선 생성 중').first()).toBeVisible();
+  await page.getByRole('button', { name: '대시보드로 이동' }).click();
   await expect(page).toHaveURL(/\/home\/board$/);
-  await expect(page.getByText('아직 확인된 건강 기록이 없어요.')).toBeVisible();
+});
+
+test('기기 번호가 틀리거나 Wi-Fi 연결에 실패하면 복구 화면이 나온다', async ({ page }) => {
+  await page.goto('/home/register');
+  await page.getByRole('textbox', { name: '이름' }).fill('하늘');
+  await page.getByRole('button', { name: '기기 연결하기' }).click();
+
+  await page.getByRole('button', { name: 'QR 코드로 연결' }).click();
+  await page.getByRole('button', { name: '기기 번호 직접 입력' }).click();
+  await page.getByRole('textbox', { name: '기기 번호' }).fill('HC-0000');
+  await page.getByRole('button', { name: '연결하기' }).click();
+  await expect(page.getByText('기기를 찾지 못했어요')).toBeVisible();
+
+  await page.getByRole('button', { name: '다시 찾기' }).click();
+  await page.getByRole('button', { name: '이 기기 연결' }).click();
+  await page.getByRole('textbox', { name: '비밀번호' }).fill('wrong');
+  await page.getByRole('button', { name: '연결하기' }).click();
+  await expect(page.getByText('Wi-Fi 연결에 실패했어요')).toBeVisible();
 });
 
 test('초대 코드로 참여하면 대상이 늘어난다', async ({ page }) => {

@@ -24,6 +24,7 @@ import {
   type SubjectSummary,
   type TimelineBar,
   type ConsentItem,
+  DeviceNotFoundError,
   type TrendBucket,
   type TrendMissing,
   trendRange,
@@ -143,6 +144,8 @@ type MockSubject = {
   records?: Map<string, DayRecord>;
   /** 기기가 붙은 Wi-Fi */
   network?: string;
+  /** 등록 중인 기기 번호 */
+  pendingDevice?: string;
   consents?: ConsentItem[];
 };
 
@@ -620,6 +623,41 @@ export const mockSource: CareSource = {
       .filter((event) => event.kind !== 'deviceOff' && isSameDay(event.at, date))
       .map((event) => ({ id: event.id, at: event.at, place, title: EVENT_COPY[event.kind].title }));
     return resolve({ supported: true, photos, videos });
+  },
+
+  registerDevice(code, place) {
+    const subject = current();
+    const clean = code.trim().toUpperCase();
+    if (!clean || clean.endsWith('0000')) return Promise.reject(new DeviceNotFoundError());
+    subject.device = 'radar';
+    subject.profile = { ...subject.profile, place };
+    subject.pendingDevice = clean;
+    return resolve({
+      id: `${subject.id}-device`,
+      bindingId: `${subject.id}-binding`,
+      place,
+      kind: 'radar' as const,
+      model: 'HC-R1',
+      firmware: FIRMWARE,
+      connection: 'unknown' as const,
+      network: subject.network ?? null,
+    });
+  },
+
+  waitForDevice() {
+    const subject = current();
+    // 목업: 9999 로 끝나는 기기 번호는 서버 연결이 늦어지는 경우 (05-L)
+    if (subject.pendingDevice?.endsWith('9999')) {
+      return new Promise((done) => setTimeout(() => done(false), 300));
+    }
+    return new Promise((done) =>
+      setTimeout(() => {
+        subject.empty = false;
+        subject.offline = false;
+        subject.records = undefined;
+        done(true);
+      }, 600),
+    );
   },
 
   devices() {
