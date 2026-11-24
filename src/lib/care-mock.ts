@@ -14,6 +14,7 @@ import {
   type DeviceKind,
   type FamilyMember,
   type HomeStatus,
+  type HomeSummary,
   type Measurement,
   type MetricKey,
   type NotificationPrefs,
@@ -245,7 +246,10 @@ function measurement(
     id: `${subject.id}-${dayKey(date)}-${hour}${minute}`,
     at: new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour, minute),
     metrics: Object.fromEntries(
-      METRIC_KEYS.map((key) => [key, { value: values[key], assessment: 'usual' }]),
+      METRIC_KEYS.map((key) => [
+        key,
+        { value: values[key], assessment: 'usual', confidence: 'verified' },
+      ]),
     ) as Measurement['metrics'],
   };
 }
@@ -286,6 +290,27 @@ function records(subject: MockSubject) {
     subject.records = new Map(days.map((date) => [dayKey(date), buildDay(subject, date)]));
   }
   return subject.records;
+}
+
+/** 이번 달 평균을 개인 기준선으로 보고 최신 값과의 차이를 낸다. 기록이 7일 미만이면 만드는 중 */
+function baselinesOf(subject: MockSubject): HomeSummary['baselines'] {
+  const latest = latestOf(subject);
+  const days = [...records(subject).values()];
+  if (!latest) return {};
+  const ready = days.filter((record) => record.measurementCount > 0).length >= 7;
+  const result: HomeSummary['baselines'] = {};
+  for (const key of ['hr', 'rr', 'spo2'] as const) {
+    const value = latest.metrics[key].value;
+    if (value === null) continue;
+    if (!ready) {
+      result[key] = { status: 'collecting' };
+      continue;
+    }
+    const values = days.flatMap((record) => metricValues(record.measurements, key));
+    const baseline = values.reduce((sum, item) => sum + item, 0) / values.length;
+    result[key] = { status: 'ready', deviation: Math.round(value - baseline) };
+  }
+  return result;
 }
 
 function homeStatus(subject: MockSubject, unacked: MockEvent | undefined) {
@@ -415,6 +440,7 @@ export const mockSource: CareSource = {
       statusMessage: message,
       latest: latestOf(subject),
       primaryEvent: unacked ? toCareEvent(unacked) : null,
+      baselines: baselinesOf(subject),
     });
   },
 

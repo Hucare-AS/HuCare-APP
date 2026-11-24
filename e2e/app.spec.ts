@@ -13,7 +13,7 @@ test('대상 카드를 누르면 그 대상의 대시보드로 간다', async ({
   await page.goto('/home');
   await page.getByRole('button', { name: /^지우,/ }).click();
   await expect(page).toHaveURL(/\/home\/board$/);
-  await expect(page.getByText(/지우는 오늘도 평소와 같으세요/)).toBeVisible();
+  await expect(page.getByText('지금 놀이방에 계세요')).toBeVisible();
 
   // 기록 탭도 고른 대상 기준이다
   await page.getByRole('tab', { name: '기록' }).click();
@@ -159,7 +159,7 @@ test('홈에서 알림을 확인하면 평소 상태로 바뀌고 알림 목록�
   await expect(page.getByText(/어머니는 확인이 필요해요/)).toBeVisible();
 
   await page.getByRole('button', { name: '확인했어요' }).click();
-  await expect(page.getByText(/어머니는 오늘도 평소와 같으세요/)).toBeVisible();
+  await expect(page.getByText('지금 거실에서 건강을 확인하고 있어요')).toBeVisible();
 
   await page.getByRole('tab', { name: '알림' }).click();
   await expect(page.getByText('확인 필요')).toBeHidden();
@@ -211,17 +211,19 @@ test('날짜 주소로 바로 들어와도 뒤로가기는 이번 달 기록으�
   await expect(page).toHaveURL(/\/records\/month$/);
 });
 
-test('홈 바로가기와 종 아이콘이 각 화면으로 이동한다', async ({ page }) => {
+test('대시보드에서 기록과 알림으로 이동한다', async ({ page }) => {
   await page.goto('/home/board');
-  await page.getByRole('button', { name: '한달 기록' }).click();
-  await expect(page).toHaveURL(/\/records\/month$/);
+  await expect(page.getByText('기준선 대비', { exact: false }).first()).toBeVisible();
+  await expect(page.getByText('오늘 이벤트 2건')).toBeVisible();
+
+  await page.getByRole('tab', { name: '주간' }).click();
+  await expect(page.getByText('건강 확인 횟수')).toBeVisible();
+
+  await page.getByRole('button', { name: '기록 자세히 보기' }).click();
+  await expect(page).toHaveURL(/\/records$/);
 
   await page.getByRole('button', { name: '알림' }).click();
   await expect(page).toHaveURL(/\/alerts$/);
-
-  await page.getByRole('tab', { name: '홈' }).click();
-  await page.getByRole('button', { name: '설정' }).click();
-  await expect(page).toHaveURL(/\/settings$/);
 });
 
 test('달력은 실제 요일에 맞고 이번 달 뒤로는 갈 수 없다', async ({ page }) => {

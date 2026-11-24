@@ -10,7 +10,15 @@ export type MetricKey = (typeof METRIC_KEYS)[number];
 export type Assessment = 'usual' | 'changed' | 'unknown';
 
 /** 측정하지 못했거나 품질이 낮은 값은 value 가 null 이다 */
-export type Metric = { value: number | null; assessment: Assessment };
+export type Metric = {
+  value: number | null;
+  assessment: Assessment;
+  /** verified: 기기가 확인한 값, assumed: 추정한 값. 모르면 없음 */
+  confidence?: 'verified' | 'assumed' | null;
+};
+
+/** 최신 값과 개인 기준선의 차이. collecting 이면 아직 기준선을 만드는 중 */
+export type BaselineDelta = { status: 'ready'; deviation: number } | { status: 'collecting' };
 
 export type Measurement = {
   id: string;
@@ -146,6 +154,8 @@ export type HomeSummary = {
   latest: Measurement | null;
   /** 확인이 필요한 가장 중요한 알림 */
   primaryEvent: CareEvent | null;
+  /** 지표별 기준선 대비. 기준선이 없는 지표는 빠진다 */
+  baselines: Partial<Record<MetricKey, BaselineDelta>>;
 };
 
 export type DayStatus = 'normal' | 'alert' | 'unknown';

@@ -16,6 +16,7 @@ import {
   type DayRecord,
   type DayStatus,
   type HomeStatus,
+  type HomeSummary,
   type Measurement,
   type SubjectKind,
   type SubjectSummary,
@@ -54,6 +55,7 @@ type ApiMetric = {
   availability: 'available' | 'not_measured' | 'failed' | 'unsupported';
   quality: 'valid' | 'insufficient' | 'unknown';
   assessment: Assessment;
+  confidence?: string | null;
 };
 
 type ApiMeasurement = { id: string; measured_at: string; metrics: ApiMetric[] };
@@ -77,6 +79,8 @@ type ApiHome = {
   /** 지금 이 보호자가 쓸 수 있는 기능 (기기 지원 · 동의 · 권한을 모두 따진 값) */
   available_features?: { photo?: boolean; event_video?: boolean };
   presence: { state: Presence };
+  /** 지표별 기준선 비교 (status: ready · collecting · unsupported …) */
+  baselines?: Record<string, { status: string; deviation?: number | null }>;
   latest_measurement: ApiMeasurement | null;
   primary_event: ApiEvent | null;
 };
@@ -206,6 +210,10 @@ function toMeasurement(raw: ApiMeasurement): Measurement {
           {
             value: valid && metric.value !== null ? metric.value : null,
             assessment: valid ? metric.assessment : 'unknown',
+            confidence:
+              metric?.confidence === 'verified' || metric?.confidence === 'assumed'
+                ? metric.confidence
+                : null,
           },
         ];
       }),
@@ -294,6 +302,19 @@ async function activeBinding(subjectId: string) {
     `/guardian/subjects/${subjectId}/device-bindings`,
   );
   return items.find((binding) => binding.ended_at === null) ?? null;
+}
+
+function toBaselines(raw: ApiHome) {
+  const result: HomeSummary['baselines'] = {};
+  for (const [key, comparison] of Object.entries(raw.baselines ?? {})) {
+    if (!METRIC_KEYS.includes(key as MetricKey)) continue;
+    if (comparison.status === 'ready' && typeof comparison.deviation === 'number') {
+      result[key as MetricKey] = { status: 'ready', deviation: comparison.deviation };
+    } else if (comparison.status === 'collecting') {
+      result[key as MetricKey] = { status: 'collecting' };
+    }
+  }
+  return result;
 }
 
 const isInviteCode = (text: string) => /^\d{6}$/.test(text.trim());
@@ -481,6 +502,7 @@ export const apiSource: CareSource = {
       statusMessage: raw.status.message,
       latest: raw.latest_measurement ? toMeasurement(raw.latest_measurement) : null,
       primaryEvent: raw.primary_event ? toEvent(raw.primary_event) : null,
+      baselines: toBaselines(raw),
     };
   },
 
