@@ -244,17 +244,30 @@ async function freshSession() {
 }
 
 /** 응답 본문을 직접 읽어야 하는 요청 (SSE). 실패하면 ApiError */
+/** JSON 이 아닌 응답(사진 · 스트림)을 그대로 받는다. 401 이면 토큰을 갱신해 한 번 더 보낸다 */
+export async function authedFetch(
+  path: string,
+  options: { query?: Record<string, string>; accept: string; signal?: AbortSignal },
+): Promise<Response> {
+  const send = (token: string) =>
+    fetch(buildUrl(path, options.query), {
+      headers: { Accept: options.accept, Authorization: `Bearer ${token}` },
+      signal: options.signal,
+    });
+  const current = await freshSession();
+  const response = await send(current.accessToken);
+  if (response.status !== 401) return response;
+  const renewed = await refreshSession(current);
+  if (!renewed) throw signedOutError();
+  return send(renewed.accessToken);
+}
+
 export async function authedStream(
   path: string,
   query: Record<string, string>,
   signal: AbortSignal,
 ): Promise<Response> {
-  const current = await freshSession();
-  const response = await fetch(buildUrl(path, query), {
-    headers: { Accept: 'text/event-stream', Authorization: `Bearer ${current.accessToken}` },
-    signal,
-  });
-  if (response.status === 401) await refreshSession(current);
+  const response = await authedFetch(path, { query, accept: 'text/event-stream', signal });
   if (!response.ok || !response.body) {
     throw new ApiError(response.status, 'STREAM_ERROR', '실시간 연결이 끊겼어요.');
   }

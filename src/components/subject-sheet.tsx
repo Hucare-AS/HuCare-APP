@@ -186,7 +186,7 @@ type FamilyBodyProps = {
 
 /**
  * 함께 보는 가족 (Figma 882:125 · 974:4219).
- * 시안은 가족 별명 · 코드를 입력하는 방식이지만, 백엔드는 초대를 만들어 상대가 수락하는 방식이라 초대 코드(링크)를 보여준다.
+ * 시안은 가족 별명 · 코드를 입력하는 방식이지만, 백엔드는 주 보호자가 6자리 코드를 만들어 상대가 입력하는 방식이라 만든 코드를 보여준다.
  */
 function FamilyBody({ members, canManage, onRemove, onInvite, onClose }: FamilyBodyProps) {
   const [picked, setPicked] = useState<FamilyMember | null>(null);
@@ -212,8 +212,6 @@ function FamilyBody({ members, canManage, onRemove, onInvite, onClose }: FamilyB
       setPicked(null);
       if (member.me) onClose();
     });
-
-  const isLink = invite ? /^https?:\/\//.test(invite.code) : false;
 
   return (
     <>
@@ -272,14 +270,13 @@ function FamilyBody({ members, canManage, onRemove, onInvite, onClose }: FamilyB
       {invite ? (
         <View className="mt-[14px] gap-2 rounded-lg border border-line p-4">
           <Text className="text-[12px] leading-[17px] text-muted">
-            {isLink ? '초대 링크' : '초대 코드'} · {formatDate(invite.expiresAt)}{' '}
-            {formatTime(invite.expiresAt)}까지
+            초대 코드 · {formatDate(invite.expiresAt)} {formatTime(invite.expiresAt)}까지
           </Text>
           <Text selectable className="text-[16px] font-semibold leading-[23px]">
             {invite.code}
           </Text>
           <Button
-            label={isLink ? '링크 복사' : '코드 복사'}
+            label="코드 복사"
             variant="outline"
             onPress={() =>
               run(async () => {

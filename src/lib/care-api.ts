@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 
 import { ApiError, idempotencyKey } from '@/lib/api';
-import { authedRequest, authedStream, currentUser } from '@/lib/auth';
+import { authedFetch, authedRequest, authedStream, currentUser } from '@/lib/auth';
 import {
   METRIC_KEYS,
   monthKey,
@@ -23,6 +23,13 @@ import {
   type NotificationPrefs,
   type Presence,
   type TimelineBar,
+  type DeviceKind,
+  type TrendBaseline,
+  type TrendBucket,
+  type TrendConfidence,
+  type TrendMissing,
+  dayKey,
+  trendRange,
 } from '@/lib/care-model';
 
 /**
@@ -65,6 +72,10 @@ type ApiHome = {
   subject: ApiSubject;
   status: { code: HomeStatus; message: string };
   device: { id: string; location: string | null; connection_state: string } | null;
+  /** 연결된 기기 모델이 지원하는 기능. 기기가 없거나 모델을 모르면 model 이 null */
+  capabilities?: { model: string | null; photo?: boolean; event_video?: boolean } | null;
+  /** 지금 이 보호자가 쓸 수 있는 기능 (기기 지원 · 동의 · 권한을 모두 따진 값) */
+  available_features?: { photo?: boolean; event_video?: boolean };
   presence: { state: Presence };
   latest_measurement: ApiMeasurement | null;
   primary_event: ApiEvent | null;
@@ -108,6 +119,21 @@ type ApiMember = {
 };
 
 type ApiDevice = { id: string; location: string | null; version: number };
+
+type ApiTrendPoint = {
+  start_at: string;
+  end_at: string;
+  value: number | null;
+  sample_count: number;
+  confidence?: TrendConfidence | null;
+  missing_reason: TrendMissing | null;
+  baseline: {
+    status: 'ready' | 'collecting' | 'unsupported';
+    value?: number | null;
+    valid_days?: number;
+    required_days?: number;
+  };
+};
 
 type ApiInvitation = {
   subject_name: string;
@@ -234,12 +260,33 @@ function parseInvite(text: string) {
   return { id: match[1], token: match[2] };
 }
 
-/** 백엔드가 주는 초대 주소는 `/invitations/{id}?token=` 처럼 상대 경로일 수 있어 웹앱 주소를 붙인다 */
-function absoluteInviteUrl(url: string) {
-  if (/^https?:\/\//.test(url)) return url;
-  const origin =
-    Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : '';
-  return `${origin}${url.startsWith('/') ? '' : '/'}${url}`;
+const isInviteCode = (text: string) => /^\d{6}$/.test(text.trim());
+
+/** 기기 모델이 사진·영상을 남기면 카메라형, 아니면 레이더형. 모델을 모르면 null */
+function deviceKind(raw: ApiHome): DeviceKind | null {
+  const caps = raw.capabilities;
+  if (!raw.device || !caps?.model) return null;
+  return caps.photo || caps.event_video ? 'camera' : 'radar';
+}
+
+/** 마지막 칸의 기준선으로 기간 전체 기준선을 정한다 */
+function toBaseline(points: ApiTrendPoint[]): TrendBaseline {
+  const last = [...points].reverse().find((point) => point.baseline.status !== 'unsupported');
+  if (!last) return { status: 'unsupported' };
+  const { status, value, valid_days, required_days } = last.baseline;
+  if (status === 'ready' && typeof value === 'number') return { status: 'ready', value };
+  return { status: 'collecting', validDays: valid_days ?? 0, requiredDays: required_days ?? 0 };
+}
+
+/** JPEG 응답을 <Image> 에 넣을 data: 주소로 바꾼다 (웹 · 네이티브 공통) */
+async function toDataUri(response: Response) {
+  const blob = await response.blob();
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('사진을 읽지 못했어요.'));
+    reader.readAsDataURL(blob);
+  });
 }
 
 /** 기기 설치 장소는 대상이 아니라 연결된 기기에 저장된다 */
@@ -376,7 +423,7 @@ export const apiSource: CareSource = {
     return {
       guardianName: currentUser()?.displayName ?? '',
       subjectLabel: subjectLabel(raw.subject),
-      device: null,
+      device: deviceKind(raw),
       place: raw.device?.location ?? null,
       presence: raw.presence.state,
       status: raw.status.code,
@@ -499,15 +546,12 @@ export const apiSource: CareSource = {
 
   async createInvite() {
     const { id } = await subject();
-    const raw = await authedRequest<{ invite_url: string; expires_at: string }>(
-      `/guardian/subjects/${id}/invitations`,
-      {
-        method: 'POST',
-        headers: { 'Idempotency-Key': idempotencyKey() },
-        body: { role: 'caregiver' },
-      },
+    // 새 코드를 만들면 전에 만든 대기 중 코드는 서버가 취소한다
+    const raw = await authedRequest<{ code: string; expires_at: string }>(
+      `/guardian/subjects/${id}/invite-codes`,
+      { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey() }, body: {} },
     );
-    return { code: absoluteInviteUrl(raw.invite_url), expiresAt: new Date(raw.expires_at) };
+    return { code: raw.code, expiresAt: new Date(raw.expires_at) };
   },
 
   async subjects() {
@@ -525,7 +569,7 @@ export const apiSource: CareSource = {
           label: subjectLabel(item),
           kind: SUBJECT_KIND[item.type],
           place: raw.device?.location ?? null,
-          device: null,
+          device: deviceKind(raw),
           status: raw.status.code,
           statusMessage: raw.status.message,
           presence: raw.presence.state,
@@ -556,6 +600,8 @@ export const apiSource: CareSource = {
   },
 
   async previewInvite(code) {
+    // 6자리 코드는 미리 볼 수 없어 바로 수락한다
+    if (isInviteCode(code)) return null;
     const { id, token } = parseInvite(code);
     const raw = await authedRequest<ApiInvitation>(`/guardian/invitations/${id}`, {
       query: { token },
@@ -569,8 +615,18 @@ export const apiSource: CareSource = {
   },
 
   async acceptInvite(code) {
-    const { id, token } = parseInvite(code);
-    await authedRequest(`/guardian/invitations/${id}/accept`, { method: 'POST', body: { token } });
+    if (isInviteCode(code)) {
+      await authedRequest('/guardian/invite-codes/redeem', {
+        method: 'POST',
+        body: { code: code.trim() },
+      });
+    } else {
+      const { id, token } = parseInvite(code);
+      await authedRequest(`/guardian/invitations/${id}/accept`, {
+        method: 'POST',
+        body: { token },
+      });
+    }
     listPromise = null;
   },
 
@@ -580,13 +636,82 @@ export const apiSource: CareSource = {
   },
 
   inviteInput: {
-    label: '초대 링크',
-    placeholder: '받은 초대 링크를 붙여 넣어 주세요',
-    hint: '초대 링크는 7일 동안 쓸 수 있어요. 만료됐다면 새 링크를 요청하세요.',
+    label: '6자리 초대 코드',
+    placeholder: '초대 코드 6자리를 입력해주세요',
+    hint: '코드는 24시간 동안 쓸 수 있어요. 초대 링크를 받았다면 링크를 붙여 넣어도 돼요.',
   },
 
-  async media() {
-    return { supported: false, reason: '사진·영상은 아직 준비 중이에요.' };
+  async media(key) {
+    const target = await subject();
+    const raw = await home(target.id);
+    const kind = deviceKind(raw);
+    if (kind !== 'camera') {
+      return {
+        supported: false,
+        reason:
+          kind === 'radar'
+            ? '레이더형 기기는 사진과 영상을 남기지 않아요.'
+            : '카메라형 기기를 연결하면 사진을 볼 수 있어요.',
+      };
+    }
+    const videoNote = '이벤트 영상은 문자 인증 뒤 볼 수 있는데, 앱에서는 아직 준비 중이에요.';
+    if (!raw.available_features?.photo) {
+      return {
+        supported: true,
+        photos: [],
+        videos: [],
+        photoNote: '사진 수집에 동의하고 주 보호자가 사진 보기를 허용해야 볼 수 있어요.',
+        videoNote,
+      };
+    }
+    const path = `/guardian/subjects/${target.id}/photos/${key}`;
+    const response = await authedFetch(path, {
+      query: { variant: 'thumbnail' },
+      accept: 'image/jpeg',
+    });
+    // 그날 사진이 없거나 볼 수 없으면 404 를 준다
+    if (response.status === 404) return { supported: true, photos: [], videos: [], videoNote };
+    if (!response.ok)
+      throw new ApiError(response.status, 'PHOTO_ERROR', '사진을 불러오지 못했어요.');
+    const place = raw.device?.location ?? '집';
+    return {
+      supported: true,
+      photos: [
+        {
+          id: key,
+          at: null,
+          place,
+          title: `${place} 사진`,
+          uri: await toDataUri(response),
+          loadOriginal: async () => {
+            const original = await authedFetch(path, { accept: 'image/jpeg' });
+            if (!original.ok)
+              throw new ApiError(original.status, 'PHOTO_ERROR', '사진을 불러오지 못했어요.');
+            return toDataUri(original);
+          },
+        },
+      ],
+      videos: [],
+      videoNote,
+    };
+  },
+
+  async trend(metric, period, anchor) {
+    const { id } = await subject();
+    const [from, until] = trendRange(period, anchor);
+    const raw = await authedRequest<{ points: ApiTrendPoint[] }>(
+      `/guardian/subjects/${id}/trends`,
+      { query: { metric, period, date: dayKey(anchor) } },
+    );
+    const buckets: TrendBucket[] = raw.points.map((point) => ({
+      start: new Date(point.start_at),
+      end: new Date(point.end_at),
+      value: point.value,
+      count: point.sample_count,
+      confidence: point.value === null ? null : (point.confidence ?? 'unknown'),
+      missing: point.value === null ? (point.missing_reason ?? 'not_measured') : null,
+    }));
+    return { from, until, buckets, baseline: toBaseline(raw.points) };
   },
 
   watch(onChange) {

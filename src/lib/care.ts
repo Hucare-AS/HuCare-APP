@@ -6,15 +6,20 @@ import { onSignOut } from '@/lib/auth';
 import { apiSource } from '@/lib/care-api';
 import { mockSource } from '@/lib/care-mock';
 import {
-  average,
   dayKey,
-  metricValues,
   type CareEvent,
   type CareSource,
-  type DayRecord,
   type NewSubject,
   type NotificationPrefs,
+  parseDayKey,
   type ProfilePatch,
+  type TrendBaseline,
+  type TrendBucket,
+  type TrendConfidence,
+  type TrendMetric,
+  type TrendMissing,
+  type TrendPeriod,
+  type TrendSeries,
 } from '@/lib/care-model';
 import { clearResources, forget, invalidate, mutate, useResource } from '@/lib/resource';
 
@@ -148,7 +153,7 @@ export function useLiveUpdates(enabled: boolean) {
   }, [enabled, selected]);
 }
 
-/** 초대 입력 칸 문구 (목업: 6자리 코드, 백엔드: 초대 링크) */
+/** 초대 입력 칸 문구 */
 export const inviteInput = source.inviteInput;
 
 /** 화면의 "지금" */
@@ -191,42 +196,13 @@ export function useMedia(key: string) {
   return useResource(`media:${key}`, load);
 }
 
-export type TrendPeriod = 'day' | 'week' | 'month' | 'year';
-export type TrendMetric = 'hr' | 'rr' | 'spo2';
-
-/** 그 기간에 볼 날짜들. 연간은 날짜별로 다 불러올 수 없어 아직 지원하지 않는다 */
-function trendDays(period: TrendPeriod) {
-  const today = now();
-  const at = (offset: number) =>
-    new Date(today.getFullYear(), today.getMonth(), today.getDate() - offset);
-  if (period === 'day') return [at(0)];
-  if (period === 'week') return Array.from({ length: 7 }, (_, index) => at(6 - index));
-  if (period === 'month') {
-    return Array.from(
-      { length: today.getDate() },
-      (_, index) => new Date(today.getFullYear(), today.getMonth(), index + 1),
-    );
-  }
-  return null;
-}
-
-/** 기간 안의 날짜별 기록. 기록이 없는 날은 빠진다. 연간이면 null */
-async function loadTrendDays(period: TrendPeriod) {
-  readSelected();
-  const days = trendDays(period);
-  if (!days) return null;
-  const results = await Promise.allSettled(days.map((date) => source.day(dayKey(date))));
-  const records = results.flatMap((result) =>
-    result.status === 'fulfilled' ? [result.value] : [],
-  );
-  const failed = results.find((result) => result.status === 'rejected');
-  if (!records.length && failed) throw failed.reason;
-  return records;
-}
-
-export function useTrendDays(period: TrendPeriod) {
-  const load = useCallback(() => loadTrendDays(period), [period]);
-  return useResource(`trend:${period}`, load);
+/** anchor 가 든 기간의 추세 (기본은 오늘) */
+export function useTrend(metric: TrendMetric, period: TrendPeriod, anchor?: string) {
+  const load = useCallback(() => {
+    readSelected();
+    return source.trend(metric, period, (anchor && parseDayKey(anchor)) || now());
+  }, [metric, period, anchor]);
+  return useResource(`trend:${metric}:${period}:${anchor ?? 'today'}`, load);
 }
 
 export type TrendPoint = {
@@ -236,6 +212,7 @@ export type TrendPoint = {
   at: Date;
   /** 이 점에 모인 측정 수 (하루 평균이면 그날 측정 수) */
   count: number;
+  confidence: TrendConfidence | null;
 };
 
 export type Trend = {
@@ -246,78 +223,98 @@ export type Trend = {
   average: number | null;
   count: number;
   labels: { x: number; text: string }[];
+  baseline: TrendBaseline;
+  /** 값이 하나도 없을 때 가장 마지막 칸의 이유 */
+  missing: TrendMissing | null;
 };
 
-/** 일간: 이 시간보다 오래 측정이 없으면 선을 끊는다 */
-const DAY_GAP_HOURS = 3;
+const HOUR = 3_600_000;
+/** 이 시간보다 오래 값이 없으면 선을 끊는다. 일간은 측정 간격, 그 밖은 하루 칸 기준 */
+const BREAK_AFTER: Record<TrendPeriod, number> = {
+  day: 3 * HOUR,
+  week: 36 * HOUR,
+  month: 36 * HOUR,
+  year: 36 * HOUR,
+};
 
-function dayTrend(record: DayRecord | undefined, metric: TrendMetric) {
-  const points = (record?.measurements ?? []).flatMap((measurement) => {
-    const value = measurement.metrics[metric].value;
-    const hours = measurement.at.getHours() + measurement.at.getMinutes() / 60;
-    return value === null ? [] : [{ x: hours / 24, value, at: measurement.at, count: 1 }];
-  });
+function trendLabels(period: TrendPeriod, from: Date, x: (at: Date) => number) {
+  const y = from.getFullYear();
+  const m = from.getMonth();
+  if (period === 'day') {
+    return [0, 6, 12, 18].map((hour) => ({
+      x: hour / 24,
+      text: `${String(hour).padStart(2, '0')}:00`,
+    }));
+  }
+  if (period === 'week') {
+    return [0, 2, 4, 6].map((offset) => {
+      const date = new Date(y, m, from.getDate() + offset);
+      return {
+        x: x(new Date(y, m, from.getDate() + offset, 12)),
+        text: `${date.getMonth() + 1}/${date.getDate()}`,
+      };
+    });
+  }
+  if (period === 'month') {
+    const days = new Date(y, m + 1, 0).getDate();
+    return [1, 8, 15, 22, 29]
+      .filter((day) => day <= days)
+      .map((day) => ({ x: x(new Date(y, m, day, 12)), text: `${day}일` }));
+  }
+  return [0, 3, 6, 9].map((month) => ({ x: x(new Date(y, month, 15)), text: `${month + 1}월` }));
+}
+
+/** 서버(또는 목업) 추세 칸을 그래프 모양으로 바꾼다. 값이 없는 칸은 0 이 아니라 빈 구간으로 남긴다 */
+export function buildTrend(series: TrendSeries, period: TrendPeriod): Trend {
+  const from = series.from.getTime();
+  const span = series.until.getTime() - from;
+  const x = (at: Date) => Math.min(Math.max((at.getTime() - from) / span, 0), 1);
   const segments: TrendPoint[][] = [];
   const gaps: [number, number][] = [];
-  points.forEach((point, index) => {
-    const previous = points[index - 1];
-    if (previous && point.x - previous.x <= DAY_GAP_HOURS / 24) {
+  const addGap = (start: number, end: number) => {
+    const last = gaps[gaps.length - 1];
+    if (last && start - last[1] < 1e-6) last[1] = Math.max(last[1], end);
+    else if (end > start) gaps.push([start, end]);
+  };
+  let previous: TrendBucket | null = null;
+  let sum = 0;
+  let count = 0;
+  for (const bucket of series.buckets) {
+    if (bucket.value === null) {
+      addGap(x(bucket.start), x(bucket.end));
+      previous = null;
+      continue;
+    }
+    const point: TrendPoint = {
+      x: x(new Date((bucket.start.getTime() + bucket.end.getTime()) / 2)),
+      value: Math.round(bucket.value),
+      at: bucket.start,
+      count: bucket.count,
+      confidence: bucket.confidence,
+    };
+    sum += bucket.value * Math.max(bucket.count, 1);
+    count += Math.max(bucket.count, 1);
+    if (previous && bucket.start.getTime() - previous.end.getTime() <= BREAK_AFTER[period]) {
       segments[segments.length - 1].push(point);
     } else {
-      if (previous) gaps.push([previous.x, point.x]);
+      if (previous) addGap(x(previous.end), x(bucket.start));
       segments.push([point]);
     }
-  });
-  const labels = [0, 6, 12, 18].map((hour) => ({
-    x: hour / 24,
-    text: `${String(hour).padStart(2, '0')}:00`,
-  }));
-  return { segments, gaps, labels };
-}
-
-/** 주간 · 월간: 하루 평균을 한 점으로 */
-function dailyTrend(records: DayRecord[], metric: TrendMetric, period: 'week' | 'month') {
-  const days = trendDays(period) ?? [];
-  const today = now();
-  const slots =
-    period === 'week' ? 7 : new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
-  const byKey = new Map(records.map((record) => [dayKey(record.date), record]));
-  const segments: TrendPoint[][] = [];
-  const gaps: [number, number][] = [];
-  let open = false;
-  days.forEach((date, index) => {
-    const slot = period === 'week' ? index : date.getDate() - 1;
-    const values = metricValues(byKey.get(dayKey(date))?.measurements ?? [], metric);
-    const value = average(values);
-    if (value === null) {
-      gaps.push([slot / slots, (slot + 1) / slots]);
-      open = false;
-      return;
-    }
-    const point = { x: (slot + 0.5) / slots, value, at: date, count: values.length };
-    if (open) segments[segments.length - 1].push(point);
-    else segments.push([point]);
-    open = true;
-  });
-  const labels =
-    period === 'week'
-      ? [0, 2, 4, 6].map((index) => ({
-          x: (index + 0.5) / 7,
-          text: `${days[index].getMonth() + 1}/${days[index].getDate()}`,
-        }))
-      : [1, 8, 15, 22, 29]
-          .filter((day) => day <= slots)
-          .map((day) => ({ x: (day - 0.5) / slots, text: `${day}일` }));
-  return { segments, gaps, labels };
-}
-
-export function buildTrend(records: DayRecord[], metric: TrendMetric, period: TrendPeriod): Trend {
-  const values = records.flatMap((record) => metricValues(record.measurements, metric));
-  const shape =
-    period === 'day'
-      ? dayTrend(records[0], metric)
-      : dailyTrend(records, metric, period === 'week' ? 'week' : 'month');
-  return { ...shape, average: average(values), count: values.length };
+    previous = bucket;
+  }
+  const lastMissing = [...series.buckets].reverse().find((bucket) => bucket.missing)?.missing;
+  return {
+    segments,
+    gaps,
+    average: count ? Math.round(sum / count) : null,
+    count: series.buckets.reduce(
+      (total, bucket) => total + (bucket.value === null ? 0 : bucket.count),
+      0,
+    ),
+    labels: trendLabels(period, series.from, x),
+    baseline: series.baseline,
+    missing: count ? null : (lastMissing ?? 'not_measured'),
+  };
 }
 
 export const useProfile = () => useResource('profile', loadProfile);

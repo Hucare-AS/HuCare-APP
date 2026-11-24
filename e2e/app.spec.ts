@@ -112,8 +112,11 @@ test('추세 그래프에서 기간과 지표를 바꾼다', async ({ page }) =>
   await page.getByRole('tab', { name: '호흡수' }).click();
   await expect(page.getByText('호흡수 · 회/분')).toBeVisible();
 
+  await expect(page.getByText(/^개인 기준선 \d+ 회\/분/)).toBeVisible();
+
   await page.getByRole('tab', { name: '연간' }).click();
-  await expect(page.getByText('연간 추세는 아직 볼 수 없어요')).toBeVisible();
+  await expect(page.getByText('올해 · 2026년', { exact: false })).toBeVisible();
+  await expect(page.getByText('하루 평균을 이었어요', { exact: false })).toBeVisible();
 });
 
 test('카메라형 대상은 사진을 날짜별로 본다', async ({ page }) => {

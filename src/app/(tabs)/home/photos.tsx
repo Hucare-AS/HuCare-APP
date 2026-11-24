@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Pressable, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { Image, Pressable, View } from 'react-native';
 
 import { BottomSheet } from '@/components/bottom-sheet';
 import { FieldBox, Note } from '@/components/care-form';
@@ -22,27 +22,60 @@ const TABS: { value: Tab; label: string }[] = [
 const dotted = (date: Date) =>
   `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`;
 
-/** 사진 자리 (Figma HC/thumb 950:321). 실제 이미지가 오기 전까지 장소 · 시각만 보여준다 */
+const clockOf = (item: Photo) => (item.at ? formatClock(item.at) : null);
+
+/** 사진 (Figma HC/thumb 950:321). 이미지가 없으면(목업) 장소 · 시각만 적은 자리 표시 상자를 보여준다 */
 function Thumb({ item, large, onPress }: { item: Photo; large?: boolean; onPress?: () => void }) {
+  const clock = clockOf(item);
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${item.title} ${formatClock(item.at)}`}
+      accessibilityLabel={[item.title, clock].filter(Boolean).join(' ')}
       onPress={onPress}
       disabled={!onPress}
       className={cn(
-        'items-center justify-center gap-2 rounded-lg bg-sand p-4 active:opacity-70',
+        'items-center justify-center gap-2 overflow-hidden rounded-lg bg-sand active:opacity-70',
+        !item.uri && 'p-4',
         large ? 'h-[260px]' : 'h-[128px] flex-1',
       )}
     >
-      <Text className="text-[16px] font-semibold leading-[23px] tracking-normal text-care-green">
-        {item.title}
-      </Text>
-      <Text className="text-[12px] leading-[17px] tracking-normal text-care-green">
-        {formatClock(item.at)} · 미리보기
-      </Text>
+      {item.uri ? (
+        <Image
+          source={{ uri: item.uri }}
+          accessibilityIgnoresInvertColors
+          resizeMode={large ? 'contain' : 'cover'}
+          className="h-full w-full"
+        />
+      ) : (
+        <>
+          <Text className="text-[16px] font-semibold leading-[23px] tracking-normal text-care-green">
+            {item.title}
+          </Text>
+          <Text className="text-[12px] leading-[17px] tracking-normal text-care-green">
+            {clock ? `${clock} · 미리보기` : '미리보기'}
+          </Text>
+        </>
+      )}
     </Pressable>
   );
+}
+
+/** 크게 볼 때 원본을 불러와 바꿔 끼운다. 실패하면 썸네일을 그대로 둔다 */
+function useOriginal(photo: Photo | null) {
+  const [original, setOriginal] = useState<{ id: string; uri: string } | null>(null);
+  useEffect(() => {
+    if (!photo?.loadOriginal) return;
+    let alive = true;
+    photo.loadOriginal().then(
+      (uri) => alive && setOriginal({ id: photo.id, uri }),
+      () => {},
+    );
+    return () => {
+      alive = false;
+    };
+  }, [photo]);
+  if (!photo) return null;
+  return original?.id === photo.id ? { ...photo, uri: original.uri } : photo;
 }
 
 /** 08-A 사진 · 이벤트 영상 (Figma 976:4855) */
@@ -51,6 +84,7 @@ export default function PhotosScreen() {
   const [tab, setTab] = useState<Tab>('photos');
   const [date, setDate] = useState(() => now());
   const [open, setOpen] = useState<Photo | null>(null);
+  const large = useOriginal(open);
   const resource = useMedia(dayKey(date));
   const media = resource.data;
   const isToday = dayKey(date) === dayKey(now());
@@ -116,7 +150,9 @@ export default function PhotosScreen() {
               ))
             ) : (
               <Text className="py-6 text-center text-muted">
-                {tab === 'photos' ? '이 날짜의 사진이 없어요.' : '이 날짜의 이벤트 영상이 없어요.'}
+                {tab === 'photos'
+                  ? (media.photoNote ?? '이 날짜의 사진이 없어요.')
+                  : (media.videoNote ?? '이 날짜의 이벤트 영상이 없어요.')}
               </Text>
             )}
             <Note
@@ -135,9 +171,9 @@ export default function PhotosScreen() {
             <Text className="text-[24px] font-semibold leading-[34px] tracking-[-0.6px] text-black">
               {home?.subjectLabel ?? open.title}
             </Text>
-            <Thumb item={open} large />
+            <Thumb item={large ?? open} large />
             <Text className="text-muted">
-              {dotted(open.at)} {formatClock(open.at)} · {open.place}
+              {[dotted(open.at ?? date), clockOf(open)].filter(Boolean).join(' ')} · {open.place}
             </Text>
           </View>
         ) : null}

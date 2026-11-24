@@ -44,7 +44,14 @@ export default function JoinScreen() {
     setBusy(true);
     setMessage(null);
     try {
-      setPreview(await previewInvite(value));
+      const found = await previewInvite(value);
+      if (found) {
+        setPreview(found);
+      } else {
+        // 미리 볼 수 없는 코드(백엔드 6자리 코드)는 바로 참여한다
+        await acceptInvite(value);
+        router.dismissTo('/home');
+      }
     } catch (reason) {
       setMessage({ text: reasonText(reason), error: true });
     } finally {
@@ -56,8 +63,9 @@ export default function JoinScreen() {
   useEffect(() => {
     if (!invite) return;
     let alive = true;
+    // 초대 링크는 늘 미리 볼 수 있다
     previewInvite(invite).then(
-      (result) => alive && setPreview(result),
+      (result) => alive && result && setPreview(result),
       (reason) => alive && setMessage({ text: reasonText(reason), error: true }),
     );
     return () => {

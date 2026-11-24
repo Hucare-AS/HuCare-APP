@@ -22,6 +22,9 @@ import {
   type SubjectKind,
   type SubjectSummary,
   type TimelineBar,
+  type TrendBucket,
+  type TrendMissing,
+  trendRange,
 } from '@/lib/care-model';
 
 /**
@@ -542,6 +545,68 @@ export const mockSource: CareSource = {
       .filter((event) => event.kind !== 'deviceOff' && isSameDay(event.at, date))
       .map((event) => ({ id: event.id, at: event.at, place, title: EVENT_COPY[event.kind].title }));
     return resolve({ supported: true, photos, videos });
+  },
+
+  trend(metric, period, anchor) {
+    const subject = current();
+    const byDay = records(subject);
+    const [from, until] = trendRange(period, anchor);
+    const missing: TrendMissing = !subject.device
+      ? 'no_device_binding'
+      : subject.offline
+        ? 'offline'
+        : 'not_measured';
+    const empty = (start: Date, end: Date): TrendBucket => ({
+      start,
+      end,
+      value: null,
+      count: 0,
+      confidence: null,
+      missing,
+    });
+    let buckets: TrendBucket[];
+    if (period === 'day') {
+      // 목업은 1분 칸 대신 측정 한 번을 한 칸으로 둔다
+      buckets = (byDay.get(dayKey(from))?.measurements ?? []).flatMap((measurement) => {
+        const value = measurement.metrics[metric].value;
+        if (value === null) return [];
+        const end = new Date(measurement.at.getTime() + 60_000);
+        return [
+          { start: measurement.at, end, value, count: 1, confidence: 'verified', missing: null },
+        ];
+      });
+      if (!buckets.length && from <= NOW) buckets = [empty(from, until < NOW ? until : NOW)];
+    } else {
+      buckets = [];
+      for (let day = from; day < until && day <= NOW;) {
+        const next = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
+        const values = metricValues(byDay.get(dayKey(day))?.measurements ?? [], metric);
+        buckets.push(
+          values.length
+            ? {
+                start: day,
+                end: next,
+                value: values.reduce((sum, value) => sum + value, 0) / values.length,
+                count: values.length,
+                confidence: 'verified',
+                missing: null,
+              }
+            : empty(day, next),
+        );
+        day = next;
+      }
+    }
+    // 개인 기준선: 이번 달 기록 전체의 평균. 기록이 거의 없으면 아직 모으는 중
+    const all = [...byDay.values()].flatMap((record) => metricValues(record.measurements, metric));
+    const recorded = [...byDay.values()].filter((record) => record.measurementCount > 0).length;
+    const baseline =
+      recorded >= 7
+        ? {
+            status: 'ready' as const,
+            value: Math.round(all.reduce((a, b) => a + b, 0) / all.length),
+          }
+        : { status: 'collecting' as const, validDays: recorded, requiredDays: 7 };
+    return resolve({ from, until, buckets, baseline });
   },
 
   reset() {},

@@ -11,22 +11,34 @@ const PAD = 16;
 const ORANGE = '#EF7000';
 const GRID = '#E2E6E2';
 const GAP = '#F2F3F5';
+const GREEN = '#245C53';
 
 type TrendChartProps = {
   trend: Trend;
   selected: TrendPoint | null;
   onSelect: (point: TrendPoint) => void;
   label: string;
+  /** 값이 하나도 없을 때 가운데에 쓸 문구 */
+  emptyText?: string;
 };
 
 /**
- * 추세 그래프 (Figma 975:4315). 주황 실선은 측정값, 점선은 기간 평균, 회색 칸은 측정이 없던 구간.
+ * 추세 그래프 (Figma 975:4315). 주황 실선은 측정값, 점선은 기간 평균, 초록 점선은 개인 기준선,
+ * 회색 칸은 측정이 없던 구간.
  * 누르면 가장 가까운 점을 고른다.
  */
-export function TrendChart({ trend, selected, onSelect, label }: TrendChartProps) {
+export function TrendChart({
+  trend,
+  selected,
+  onSelect,
+  label,
+  emptyText = '이 기간에는 측정 기록이 없어요.',
+}: TrendChartProps) {
   const [width, setWidth] = useState(0);
   const points = trend.segments.flat();
+  const baseline = trend.baseline.status === 'ready' ? trend.baseline.value : null;
   const values = points.map((point) => point.value);
+  if (baseline !== null && values.length) values.push(baseline);
   const low = Math.min(...values);
   const high = Math.max(...values);
   // 값이 하나뿐이거나 모두 같아도 가운데에 그려지도록 범위를 벌린다
@@ -82,6 +94,18 @@ export function TrendChart({ trend, selected, onSelect, label }: TrendChartProps
                 strokeWidth={1}
               />
             ) : null}
+            {baseline !== null && points.length ? (
+              <Line
+                x1={0}
+                x2={width}
+                y1={py(baseline)}
+                y2={py(baseline)}
+                stroke={GREEN}
+                strokeOpacity={0.7}
+                strokeDasharray="2 3"
+                strokeWidth={1}
+              />
+            ) : null}
             {trend.segments.map((segment) =>
               segment.length > 1 ? (
                 <Polyline
@@ -117,7 +141,7 @@ export function TrendChart({ trend, selected, onSelect, label }: TrendChartProps
         ) : null}
         {!points.length ? (
           <View className="absolute inset-0 items-center justify-center">
-            <Text className="text-muted">이 기간에는 측정 기록이 없어요.</Text>
+            <Text className="text-muted">{emptyText}</Text>
           </View>
         ) : null}
       </Pressable>

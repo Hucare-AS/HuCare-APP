@@ -62,11 +62,76 @@ export type NewSubject = {
   place: string;
 };
 
-export type Photo = { id: string; at: Date; place: string; title: string };
+/** at 이 null 이면 찍은 시각을 모른다 (백엔드 하루 사진). uri 가 없으면 자리 표시 상자로 보여준다 */
+export type Photo = {
+  id: string;
+  at: Date | null;
+  place: string;
+  title: string;
+  /** 목록용 이미지 (백엔드는 썸네일) */
+  uri?: string;
+  /** 크게 볼 때 원본을 불러온다 */
+  loadOriginal?: () => Promise<string>;
+};
 
 /** 사진 · 이벤트 영상. supported 가 false 면 이유를 보여준다 */
 export type MediaDay =
-  { supported: true; photos: Photo[]; videos: Photo[] } | { supported: false; reason: string };
+  | {
+      supported: true;
+      photos: Photo[];
+      videos: Photo[];
+      /** 사진·영상이 비었을 때 덧붙일 안내 (예: 동의·권한이 없으면 보이지 않는다) */
+      photoNote?: string;
+      videoNote?: string;
+    }
+  | { supported: false; reason: string };
+
+export type TrendMetric = 'hr' | 'rr' | 'spo2';
+export type TrendPeriod = 'day' | 'week' | 'month' | 'year';
+
+/** 값이 없는 이유 (백엔드 missing_reason) */
+export type TrendMissing =
+  'no_device_binding' | 'offline' | 'unsupported' | 'insufficient_quality' | 'not_measured';
+
+/** verified: 기기가 확인한 값, assumed: 추정한 값 */
+export type TrendConfidence = 'verified' | 'assumed' | 'mixed' | 'unknown';
+
+/** 추세 한 칸. 일간은 1분(목업은 측정 1번), 주·월·연간은 하루 */
+export type TrendBucket = {
+  start: Date;
+  end: Date;
+  value: number | null;
+  count: number;
+  confidence: TrendConfidence | null;
+  missing: TrendMissing | null;
+};
+
+/** 개인 기준선. collecting 이면 아직 모으는 중, unsupported 면 이 기기·지표는 기준선이 없다 */
+export type TrendBaseline =
+  | { status: 'ready'; value: number }
+  | { status: 'collecting'; validDays: number; requiredDays: number }
+  | { status: 'unsupported' };
+
+export type TrendSeries = {
+  from: Date;
+  until: Date;
+  buckets: TrendBucket[];
+  baseline: TrendBaseline;
+};
+
+/** 기간의 [시작, 끝). 주는 월요일부터, 월·연은 1일부터 (백엔드 /trends 와 같다) */
+export function trendRange(period: TrendPeriod, anchor: Date): [Date, Date] {
+  const y = anchor.getFullYear();
+  const m = anchor.getMonth();
+  const d = anchor.getDate();
+  if (period === 'week') {
+    const monday = d - ((anchor.getDay() + 6) % 7);
+    return [new Date(y, m, monday), new Date(y, m, monday + 7)];
+  }
+  if (period === 'month') return [new Date(y, m, 1), new Date(y, m + 1, 1)];
+  if (period === 'year') return [new Date(y, 0, 1), new Date(y + 1, 0, 1)];
+  return [new Date(y, m, d), new Date(y, m, d + 1)];
+}
 
 export type HomeSummary = {
   guardianName: string;
@@ -154,7 +219,7 @@ export type ProfilePatch = {
   place?: string;
 };
 
-/** 내가 만든 초대. code 는 목업이면 6자리 코드, 백엔드면 초대 링크 */
+/** 내가 만든 6자리 초대 코드 */
 export type Invite = { code: string; expiresAt: Date };
 
 export type InviteStatus = 'pending' | 'accepted' | 'declined' | 'expired' | 'cancelled';
@@ -194,15 +259,20 @@ export type CareSource = {
   setSubject(id: string | null): void;
   /** 새 대상을 만들고 id 를 돌려준다 */
   createSubject(input: NewSubject): Promise<string>;
-  /** 초대 코드(목업) 또는 초대 링크(백엔드)로 받은 초대를 확인한다 */
-  previewInvite(code: string): Promise<InvitePreview>;
+  /**
+   * 받은 초대를 확인한다. 백엔드는 6자리 코드를 미리 볼 수 없어 null 을 돌려주고,
+   * 초대 링크(/invitations/{id}?token=)만 미리 본다
+   */
+  previewInvite(code: string): Promise<InvitePreview | null>;
   acceptInvite(code: string): Promise<void>;
   declineInvite(code: string): Promise<void>;
-  /** 초대 입력 칸 안내. 백엔드는 6자리 코드가 아니라 초대 링크를 쓴다 */
+  /** 초대 입력 칸 안내 */
   readonly inviteInput: { label: string; placeholder: string; hint: string };
   /** 고른 대상의 변경을 실시간으로 받는다 (웹 · 백엔드만). 구독을 끊는 함수를 돌려준다 */
   watch?(onChange: (change: LiveChange) => void): () => void;
   media(key: string): Promise<MediaDay>;
+  /** anchor 가 든 기간의 추세 */
+  trend(metric: TrendMetric, period: TrendPeriod, anchor: Date): Promise<TrendSeries>;
   /** 로그아웃 시 대상자 등 기억해 둔 값을 버린다 */
   reset(): void;
 };
