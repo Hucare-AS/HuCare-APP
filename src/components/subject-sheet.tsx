@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { Platform, Pressable, Share, TextInput, View } from 'react-native';
+import { Pressable, TextInput, View } from 'react-native';
 
 import { BottomSheet } from '@/components/bottom-sheet';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
-import { formatDate, formatTime, type FamilyMember, type Invite } from '@/lib/care';
+import { type FamilyMember } from '@/lib/care';
 import { cn } from '@/lib/cn';
 
 export type SubjectInfo = {
@@ -53,7 +53,8 @@ type SubjectSheetProps = {
   /** null 이면 그 항목을 지운다. 실패하면 오류 문장으로 거부한다 */
   onSave: (field: TextField, value: string | null) => Promise<void>;
   onRemove: (member: FamilyMember) => Promise<void>;
-  onInvite: () => Promise<Invite>;
+  /** 보호자 초대 화면으로 간다 */
+  onInvite: () => void;
   onClose: () => void;
 };
 
@@ -166,31 +167,20 @@ function TextBody({ label, placeholder, edit, save, clearable, value, onSave }: 
   );
 }
 
-/** 웹은 클립보드에 복사하고, 네이티브는 공유 창을 연다 */
-async function shareInvite(code: string) {
-  if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.clipboard) {
-    await navigator.clipboard.writeText(code);
-    return '복사했어요. 함께 돌볼 가족에게 보내 주세요.';
-  }
-  await Share.share({ message: code });
-  return null;
-}
-
 type FamilyBodyProps = {
   members: FamilyMember[];
   canManage: boolean;
   onRemove: (member: FamilyMember) => Promise<void>;
-  onInvite: () => Promise<Invite>;
+  onInvite: () => void;
   onClose: () => void;
 };
 
 /**
  * 함께 보는 가족 (Figma 882:125 · 974:4219).
- * 시안은 가족 별명 · 코드를 입력하는 방식이지만, 백엔드는 주 보호자가 6자리 코드를 만들어 상대가 입력하는 방식이라 만든 코드를 보여준다.
+ * 가족 추가는 보호자 초대 화면(06-A)에서 6자리 코드를 만들어 전한다.
  */
 function FamilyBody({ members, canManage, onRemove, onInvite, onClose }: FamilyBodyProps) {
   const [picked, setPicked] = useState<FamilyMember | null>(null);
-  const [invite, setInvite] = useState<Invite | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
 
@@ -267,27 +257,6 @@ function FamilyBody({ members, canManage, onRemove, onInvite, onClose }: FamilyB
         </View>
       ) : null}
 
-      {invite ? (
-        <View className="mt-[14px] gap-2 rounded-lg border border-line p-4">
-          <Text className="text-[12px] leading-[17px] text-muted">
-            초대 코드 · {formatDate(invite.expiresAt)} {formatTime(invite.expiresAt)}까지
-          </Text>
-          <Text selectable className="text-[16px] font-semibold leading-[23px]">
-            {invite.code}
-          </Text>
-          <Button
-            label="코드 복사"
-            variant="outline"
-            onPress={() =>
-              run(async () => {
-                const done = await shareInvite(invite.code);
-                if (done) setMessage({ text: done, error: false });
-              })
-            }
-          />
-        </View>
-      ) : null}
-
       {message ? (
         <Text className={cn('mt-2', message.error ? 'text-status-alert' : 'text-care-green')}>
           {message.text}
@@ -297,9 +266,9 @@ function FamilyBody({ members, canManage, onRemove, onInvite, onClose }: FamilyB
       {canManage ? (
         <Button
           className={cn('mt-[35px]', busy && 'opacity-50')}
-          label={invite ? '새 초대 만들기' : '추가하기'}
+          label="추가하기"
           disabled={busy}
-          onPress={() => run(async () => setInvite(await onInvite()))}
+          onPress={onInvite}
         />
       ) : (
         <Text variant="note" className="mt-[35px]">

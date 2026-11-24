@@ -9,6 +9,10 @@ import {
   dayKey,
   type CareEvent,
   type CareSource,
+  type ConsentPurpose,
+  type DeletionKind,
+  type DeviceInfo,
+  type Invite,
   type NewSubject,
   type NotificationPrefs,
   parseDayKey,
@@ -129,9 +133,6 @@ export async function acceptInvite(code: string) {
 }
 
 export const declineInvite = (code: string) => source.declineInvite(code);
-
-/** 함께 볼 가족에게 보낼 초대를 만든다 */
-export const createInvite = () => source.createInvite();
 
 /**
  * 고른 대상의 변경을 실시간으로 받아 화면 값을 새로 불러온다 (웹 · 백엔드 모드).
@@ -402,4 +403,119 @@ export function givenName(fullName: string) {
 /** 오류를 사람이 읽을 문장으로 */
 export function errorMessage(error: Error | null) {
   return error?.message || '정보를 불러오지 못했어요.';
+}
+
+// ── 설정 플로우: 기기 · 동의 · 고객지원 ─────────────────────────────
+
+const loadDevices = withSubject(() => source.devices());
+const loadConsents = withSubject(() => source.consents());
+const loadDocuments = () => source.documents();
+
+/** 고른 대상에 연결된 기기 */
+export const useDevices = () => useResource('devices', loadDevices);
+
+export const useConsents = () => useResource('consents', loadConsents);
+
+/** 공지 · 안내 문서 */
+export const useDocuments = () => useResource('documents', loadDocuments);
+
+export function useDocument(id: string | undefined) {
+  const load = useCallback(() => {
+    if (!id) return Promise.reject(new Error('문서를 찾을 수 없어요.'));
+    return source.document(id);
+  }, [id]);
+  return useResource(`document:${id ?? ''}`, load);
+}
+
+export const checkFirmware = (deviceId: string) => source.checkFirmware(deviceId);
+
+export async function changeWifi(deviceId: string, network: string, password: string) {
+  await source.changeWifi(deviceId, network, password);
+  invalidate((key) => key === 'devices');
+}
+
+export const restartDevice = (deviceId: string) => source.restartDevice(deviceId);
+
+/** 기기 연결을 해지하면 홈 · 대상 목록의 기기 정보도 바뀐다 */
+export async function unlinkDevice(device: DeviceInfo) {
+  try {
+    await source.unlinkDevice(device);
+  } finally {
+    invalidate((key) => key === 'devices' || key === 'home' || key === 'subjects');
+  }
+}
+
+export async function setConsent(purpose: ConsentPurpose, granted: boolean) {
+  try {
+    await source.setConsent(purpose, granted);
+  } finally {
+    invalidate((key) => key === 'consents' || key === 'home' || key.startsWith('media:'));
+  }
+}
+
+export const requestDeletion = (kind: DeletionKind) => source.requestDeletion(kind);
+
+/** 마지막으로 접수한 문의와 CS 모드 상태. CS 모드는 접수한 문의에만 켤 수 있다 */
+type SupportState = { ticket: string | null; csMode: boolean };
+const SUPPORT_KEY = 'hucare.support.v1';
+let supportState: SupportState | null = null;
+const supportListeners = new Set<() => void>();
+
+function readSupport(): SupportState {
+  if (supportState) return supportState;
+  try {
+    const saved = Platform.OS === 'web' ? window.localStorage.getItem(SUPPORT_KEY) : null;
+    supportState = saved ? (JSON.parse(saved) as SupportState) : { ticket: null, csMode: false };
+  } catch {
+    supportState = { ticket: null, csMode: false };
+  }
+  return supportState;
+}
+
+function writeSupport(next: SupportState) {
+  supportState = next;
+  try {
+    if (Platform.OS === 'web') window.localStorage.setItem(SUPPORT_KEY, JSON.stringify(next));
+  } catch {
+    // 저장하지 못해도 이번 세션에서는 유지된다
+  }
+  supportListeners.forEach((listener) => listener());
+}
+
+export function useSupportState() {
+  return useSyncExternalStore(
+    (listener) => {
+      supportListeners.add(listener);
+      return () => supportListeners.delete(listener);
+    },
+    readSupport,
+    () => ({ ticket: null, csMode: false }) as SupportState,
+  );
+}
+
+export async function sendSupport(message: string) {
+  const ticket = await source.sendSupport(message);
+  writeSupport({ ticket, csMode: false });
+  return ticket;
+}
+
+export async function setCsMode(on: boolean) {
+  const { ticket } = readSupport();
+  if (!ticket) throw new Error('먼저 문의를 접수하면 CS 모드를 켤 수 있어요.');
+  await source.setCsMode(ticket, on);
+  writeSupport({ ticket, csMode: on });
+}
+
+/** 보호자 초대 화면(06-A)이 다시 열려도 같은 코드를 보여주도록 대상별로 기억한다 */
+const invites = new Map<string, Invite>();
+
+export function cachedInvite() {
+  const invite = invites.get(readSelected() ?? '');
+  return invite && invite.expiresAt.getTime() > now().getTime() ? invite : null;
+}
+
+export async function issueInvite() {
+  const invite = await source.createInvite();
+  invites.set(readSelected() ?? '', invite);
+  return invite;
 }

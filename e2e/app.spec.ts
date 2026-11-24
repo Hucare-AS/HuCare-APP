@@ -22,8 +22,8 @@ test('대상 카드를 누르면 그 대상의 대시보드로 간다', async ({
 
 test('대상 수정에서 다른 대상을 고르고 전체 대상 홈으로 돌아간다', async ({ page }) => {
   await page.goto('/home');
-  await page.getByRole('button', { name: '대상 수정' }).click();
-  await expect(page.getByText('현재 대상: 어머니')).toBeVisible();
+  await page.getByRole('button', { name: '지우 대상 수정' }).click();
+  await expect(page.getByText('현재 대상: 지우')).toBeVisible();
   await expect(page.getByText('반려동물 · 레이더형 · 연결 끊김')).toBeVisible();
 
   await page.getByRole('button', { name: '전체 대상 홈' }).click();
@@ -55,9 +55,11 @@ test('초대 코드로 참여하면 대상이 늘어난다', async ({ page }) =>
 
   await page.getByRole('textbox', { name: '6자리 초대 코드' }).fill('482917');
   await page.getByRole('button', { name: '초대 확인' }).click();
-  await expect(page.getByText('김민수님이 할머니 돌봄에 초대했어요')).toBeVisible();
+  await expect(page.getByText('초대를 수락할까요?')).toBeVisible();
+  await expect(page.getByText('할머니 · 안방 · 레이더형')).toBeVisible();
+  await expect(page.getByText('김민수 · 주 보호자')).toBeVisible();
 
-  await page.getByRole('button', { name: '참여하기' }).click();
+  await page.getByRole('button', { name: '초대 수락' }).click();
   await expect(page).toHaveURL(/\/home$/);
   await expect(page.getByText('돌봄 대상 4명')).toBeVisible();
 });
@@ -66,8 +68,20 @@ test('받은 초대를 거절할 수 있다', async ({ page }) => {
   await page.goto('/home/join');
   await page.getByRole('textbox', { name: '6자리 초대 코드' }).fill('482917');
   await page.getByRole('button', { name: '초대 확인' }).click();
-  await page.getByRole('button', { name: '거절하기' }).click();
+  await page.getByRole('button', { name: '취소' }).click();
   await expect(page.getByText('초대를 거절했어요.')).toBeVisible();
+});
+
+test('만료된 코드면 새 코드를 입력하는 화면이 나온다', async ({ page }) => {
+  await page.goto('/home/join');
+  await page.getByRole('textbox', { name: '6자리 초대 코드' }).fill('000000');
+  await page.getByRole('button', { name: '초대 확인' }).click();
+  await expect(page.getByText('코드가 만료됐어요')).toBeVisible();
+  await expect(page.getByText('새 코드가 필요해요')).toBeVisible();
+
+  await page.getByRole('textbox', { name: '초대 코드' }).fill('482917');
+  await page.getByRole('button', { name: '다시 확인' }).click();
+  await expect(page.getByText('초대를 수락할까요?')).toBeVisible();
 });
 
 test('설정에서 설치 장소를 저장하고 연락처를 지운다', async ({ page }) => {
@@ -88,12 +102,19 @@ test('설정에서 설치 장소를 저장하고 연락처를 지운다', async 
   await expect(page.getByText('011-0000-0000')).toBeHidden();
 });
 
-test('함께 보는 가족에게 초대 코드를 만들고 가족을 내보낸다', async ({ page }) => {
+test('가족 추가를 누르면 보호자 초대 코드가 나온다', async ({ page }) => {
   await page.goto('/settings');
   await page.getByRole('button', { name: /함께 보는 가족/ }).click();
   await page.getByRole('button', { name: '추가하기' }).click();
-  await expect(page.getByText('482917')).toBeVisible();
+  await expect(page).toHaveURL(/\/settings\/invite$/);
+  await expect(page.getByText('482 917')).toBeVisible();
+  await expect(page.getByText(/^남은 시간 (10:00|09:5\d)$/)).toBeVisible();
+  await expect(page.getByText('코드는 발급 후 10분 동안 유효해요.')).toBeVisible();
+});
 
+test('함께 보는 가족을 내보낸다', async ({ page }) => {
+  await page.goto('/settings');
+  await page.getByRole('button', { name: /함께 보는 가족/ }).click();
   await page.getByRole('button', { name: '동생', exact: true }).click();
   await page.getByRole('button', { name: '내보내기' }).click();
   await expect(page.getByRole('button', { name: '동생', exact: true })).toBeHidden();
@@ -212,19 +233,77 @@ test('달력은 실제 요일에 맞고 이번 달 뒤로는 갈 수 없다', as
   await expect(page.getByText('9월 기록이 없어요')).toBeVisible();
 });
 
-test('설정 값을 바꾸면 새로고침해도 유지된다', async ({ page }) => {
+test('알림 설정에서 일일 요약과 방해금지를 바꾸면 유지된다', async ({ page }) => {
   await page.goto('/settings');
-  const deviceOff = page.getByRole('switch', { name: '기기 꺼짐' });
-  await expect(deviceOff).toHaveAttribute('aria-checked', 'false');
-  await deviceOff.click();
-
-  await page.getByRole('combobox', { name: '야간 알림' }).click();
-  await page.getByRole('button', { name: '아침에 모아 받기' }).click();
+  await page.getByRole('button', { name: '알림 설정' }).click();
+  await page.getByRole('button', { name: '일일 요약' }).click();
+  await expect(page.getByText('수신 꺼짐')).toBeVisible();
+  await page.getByRole('button', { name: '요약 받기' }).click();
+  await expect(page.getByText('수신 중')).toBeVisible();
 
   await page.reload();
-  await expect(page.getByRole('switch', { name: '기기 꺼짐' })).toHaveAttribute(
-    'aria-checked',
-    'true',
-  );
-  await expect(page.getByRole('combobox', { name: '야간 알림' })).toHaveText('아침에 모아 받기');
+  await expect(page.getByText('수신 중')).toBeVisible();
+
+  await page.getByRole('button', { name: '뒤로가기' }).click();
+  await expect(page).toHaveURL(/\/settings\/notifications$/);
+  await page.getByRole('button', { name: '방해금지 시간' }).click();
+  await page.getByRole('button', { name: '밤 10시 ~ 오전 7시' }).click();
+  await expect(page.getByText('방해금지를 설정했어요')).toBeVisible();
+  await expect(page.getByText('오후 10:00 ~ 오전 7:00').filter({ visible: true })).toBeVisible();
+});
+
+test('기기 관리에서 기기를 재시작하고 Wi-Fi를 바꾼다', async ({ page }) => {
+  await page.goto('/settings');
+  await page.getByRole('button', { name: '기기 관리' }).click();
+  await page.getByRole('button', { name: '거실 기기' }).click();
+  await expect(page.getByText('연결됨 · 어머니')).toBeVisible();
+
+  await page.getByRole('button', { name: '기기 재시작' }).click();
+  await expect(page.getByText('기기를 재시작할까요?')).toBeVisible();
+  await page.getByRole('button', { name: '재시작하기' }).click();
+  await expect(page.getByText('재시작을 요청했어요')).toBeVisible();
+  await page.getByRole('button', { name: '기기 상태로' }).click();
+
+  await page.getByRole('button', { name: 'Wi-Fi 변경' }).click();
+  await page.getByRole('button', { name: '새 네트워크 선택' }).first().click();
+  await page.getByLabel('Wi-Fi 비밀번호').fill('test-password');
+  await page.getByRole('button', { name: '연결하기' }).click();
+  await expect(page.getByText('Wi-Fi를 변경했어요')).toBeVisible();
+});
+
+test('사진 동의를 철회하면 동의 이력에 남는다', async ({ page }) => {
+  await page.goto('/settings/privacy');
+  await page.getByRole('button', { name: '사진 동의 철회' }).click();
+  await page.getByRole('button', { name: '동의 철회하기' }).click();
+  await expect(page.getByText('사진 동의를 철회했어요')).toBeVisible();
+
+  await page.getByRole('button', { name: '설정으로' }).click();
+  await page.getByRole('button', { name: '개인정보와 동의' }).click();
+  await page.getByRole('button', { name: '동의 이력' }).click();
+  await expect(page.getByText(/^선택 동의 · 철회함/)).toBeVisible();
+});
+
+test('문의를 접수하면 CS 모드를 켤 수 있다', async ({ page }) => {
+  await page.goto('/settings/cs');
+  await expect(page.getByRole('button', { name: 'CS 모드 켜기' })).toBeDisabled();
+
+  await page.goto('/settings/contact');
+  await page.getByLabel('문의 내용').fill('기기 연결이 자주 끊겨요.');
+  await page.getByRole('button', { name: '문의 보내기' }).click();
+  await expect(page.getByText('문의를 접수했어요')).toBeVisible();
+
+  await page.getByRole('button', { name: 'CS 모드' }).click();
+  await page.getByRole('button', { name: 'CS 모드 켜기' }).click();
+  await expect(page.getByText('켜짐')).toBeVisible();
+});
+
+test('공지와 자주 묻는 질문을 본다', async ({ page }) => {
+  await page.goto('/settings/support');
+  await page.getByRole('button', { name: '공지사항' }).click();
+  await page.getByRole('button', { name: 'HuCare 이용 안내' }).click();
+  await expect(page.getByText('설정의 기기 관리에서 확인할 수 있어요.')).toBeVisible();
+
+  await page.goto('/settings/faq');
+  await page.getByRole('button', { name: '밤에도 긴급 알림이 오나요?' }).click();
+  await expect(page.getByText('낙상과 장시간 무움직임은 밤에도 알려드려요.')).toBeVisible();
 });

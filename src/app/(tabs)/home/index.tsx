@@ -117,26 +117,33 @@ function SubjectOverview({ subjects }: { subjects: SubjectSummary[] }) {
         </View>
 
         <View className="mt-4 gap-[18px] px-6">
-          <View className="h-[30px] flex-row items-center justify-between">
+          <View className="h-[30px] justify-center">
             <Text className="text-[18px] font-semibold leading-[22px] tracking-normal">
               돌봄 대상 {subjects.length}명
             </Text>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="대상 수정"
-              onPress={() => router.push('/home/subjects')}
-              className="active:opacity-60"
-            >
-              <Text className="font-semibold leading-[17px] tracking-normal">대상 수정 ›</Text>
-            </Pressable>
           </View>
+          {/* 02-A (Figma 986:5463): 카드마다 아래에 그 대상의 "대상 수정" */}
           {subjects.map((subject) => (
-            <SubjectCard
-              key={subject.id}
-              subject={subject}
-              meta={subjectMeta(subject, ['place', 'device'])}
-              onPress={() => open(subject.id)}
-            />
+            <View key={subject.id} className="gap-[14px]">
+              <SubjectCard
+                subject={subject}
+                meta={subjectMeta(subject, ['place', 'device'])}
+                onPress={() => open(subject.id)}
+              />
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`${subject.label} 대상 수정`}
+                onPress={() => {
+                  selectSubject(subject.id);
+                  router.push('/home/subjects');
+                }}
+                className="self-end active:opacity-60"
+              >
+                <Text className="text-[13px] font-semibold leading-[17px] tracking-normal">
+                  대상 수정 ›
+                </Text>
+              </Pressable>
+            </View>
           ))}
           <Button
             label="대상 추가"

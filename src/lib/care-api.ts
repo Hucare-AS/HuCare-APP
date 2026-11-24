@@ -148,6 +148,26 @@ type ApiPrefs = {
   device_offline: boolean;
   night_mode: 'immediate' | 'morning';
   version: number;
+  quiet_start: string | null;
+  quiet_end: string | null;
+  baseline_deviation: boolean;
+  daily_summary: boolean;
+};
+
+type ApiDeviceDetail = ApiDevice & {
+  model: string | null;
+  firmware_version: string | null;
+  connection_state: 'online' | 'offline' | 'unknown';
+};
+
+type ApiBinding = { id: string; device_id: string; started_at: string; ended_at: string | null };
+
+type ApiConsents = {
+  items: {
+    purpose: 'metrics' | 'photo' | 'video' | 'training';
+    policy: { version: string } | null;
+    decision: { granted: boolean; decided_at: string } | null;
+  }[];
 };
 
 type Page<T> = { items: T[]; next_cursor: string | null };
@@ -260,6 +280,22 @@ function parseInvite(text: string) {
   return { id: match[1], token: match[2] };
 }
 
+function localTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Seoul';
+  } catch {
+    return 'Asia/Seoul';
+  }
+}
+
+/** 고른 대상의 지금 기기 연결 */
+async function activeBinding(subjectId: string) {
+  const { items } = await authedRequest<{ items: ApiBinding[] }>(
+    `/guardian/subjects/${subjectId}/device-bindings`,
+  );
+  return items.find((binding) => binding.ended_at === null) ?? null;
+}
+
 const isInviteCode = (text: string) => /^\d{6}$/.test(text.trim());
 
 /** 기기 모델이 사진·영상을 남기면 카메라형, 아니면 레이더형. 모델을 모르면 null */
@@ -370,6 +406,12 @@ const toPrefs = (raw: ApiPrefs): NotificationPrefs => ({
   inactive: raw.inactivity,
   deviceOff: raw.device_offline,
   nightAlert: raw.night_mode === 'immediate' ? 'as-is' : 'morning',
+  baselineDeviation: raw.baseline_deviation,
+  quietHours:
+    raw.quiet_start && raw.quiet_end
+      ? { start: raw.quiet_start.slice(0, 5), end: raw.quiet_end.slice(0, 5) }
+      : null,
+  dailySummary: raw.daily_summary,
 });
 
 async function patchPrefs(patch: Partial<NotificationPrefs>) {
@@ -384,6 +426,15 @@ async function patchPrefs(patch: Partial<NotificationPrefs>) {
       ...(patch.deviceOff !== undefined && { device_offline: patch.deviceOff }),
       ...(patch.nightAlert !== undefined && {
         night_mode: patch.nightAlert === 'as-is' ? 'immediate' : 'morning',
+      }),
+      ...(patch.baselineDeviation !== undefined && {
+        baseline_deviation: patch.baselineDeviation,
+      }),
+      ...(patch.dailySummary !== undefined && { daily_summary: patch.dailySummary }),
+      ...(patch.quietHours !== undefined && {
+        quiet_start: patch.quietHours?.start ?? null,
+        quiet_end: patch.quietHours?.end ?? null,
+        quiet_time_zone: patch.quietHours ? localTimeZone() : null,
       }),
     },
   });
@@ -551,7 +602,12 @@ export const apiSource: CareSource = {
       `/guardian/subjects/${id}/invite-codes`,
       { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey() }, body: {} },
     );
-    return { code: raw.code, expiresAt: new Date(raw.expires_at) };
+    const expiresAt = new Date(raw.expires_at);
+    return {
+      code: raw.code,
+      expiresAt,
+      validMinutes: Math.round((expiresAt.getTime() - Date.now()) / 60_000),
+    };
   },
 
   async subjects() {
@@ -608,6 +664,7 @@ export const apiSource: CareSource = {
     });
     return {
       subjectName: raw.subject_name,
+      subjectDetail: null,
       inviterName: raw.inviter_name,
       status: raw.status,
       expiresAt: new Date(raw.expires_at),
@@ -694,6 +751,145 @@ export const apiSource: CareSource = {
       videos: [],
       videoNote,
     };
+  },
+
+  async devices() {
+    const target = await subject();
+    const raw = await home(target.id);
+    if (!raw.device) return [];
+    const [device, binding] = await Promise.all([
+      authedRequest<ApiDeviceDetail>(`/guardian/devices/${raw.device.id}`),
+      activeBinding(target.id),
+    ]);
+    return [
+      {
+        id: device.id,
+        bindingId: binding?.id ?? null,
+        place: device.location,
+        kind: deviceKind(raw),
+        model: device.model,
+        firmware: device.firmware_version,
+        connection: device.connection_state,
+        network: null,
+      },
+    ];
+  },
+
+  async checkFirmware() {
+    // 새 버전 배포 정보를 주는 API 가 아직 없다
+    return null;
+  },
+
+  async changeWifi() {
+    throw new Error('Wi-Fi 는 휴대폰 앱에서 Bluetooth 로 기기에 전달해야 바꿀 수 있어요.');
+  },
+
+  async restartDevice(deviceId) {
+    await authedRequest(`/guardian/devices/${deviceId}/commands`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey() },
+      body: { kind: 'restart' },
+    });
+  },
+
+  async unlinkDevice(device) {
+    if (!device.bindingId) throw new Error('연결 정보를 찾지 못했어요.');
+    await authedRequest(`/guardian/device-bindings/${device.bindingId}/end`, { method: 'POST' });
+  },
+
+  async consents() {
+    const { id } = await subject();
+    const raw = await authedRequest<ApiConsents>(`/guardian/subjects/${id}/consents`);
+    return raw.items.flatMap((item) =>
+      item.purpose === 'training'
+        ? []
+        : [
+            {
+              purpose: item.purpose,
+              granted: item.decision?.granted ?? null,
+              decidedAt: item.decision ? new Date(item.decision.decided_at) : null,
+            },
+          ],
+    );
+  },
+
+  async setConsent(purpose, granted) {
+    const { id } = await subject();
+    const raw = await authedRequest<ApiConsents>(`/guardian/subjects/${id}/consents`);
+    const version = raw.items.find((item) => item.purpose === purpose)?.policy?.version;
+    if (!version) throw new Error('동의 문서를 찾지 못했어요.');
+    await authedRequest(`/guardian/subjects/${id}/consent-decisions`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey() },
+      body: { purpose, policy_version: version, granted },
+    });
+  },
+
+  async requestDeletion(kind) {
+    const { id } = await subject();
+    await authedRequest(`/guardian/subjects/${id}/deletion-requests`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey() },
+      body: { kind },
+    });
+  },
+
+  async documents() {
+    const raw = await authedRequest<{
+      items: { id: string; title: string; effective_at: string | null }[];
+    }>('/documents');
+    return raw.items.map((doc) => ({
+      id: doc.id,
+      title: doc.title,
+      effectiveAt: doc.effective_at ? new Date(doc.effective_at) : null,
+    }));
+  },
+
+  async document(id) {
+    const raw = await authedRequest<{
+      id: string;
+      title: string;
+      effective_at: string | null;
+      content_markdown: string;
+    }>(`/documents/${id}`);
+    return {
+      id: raw.id,
+      title: raw.title,
+      effectiveAt: raw.effective_at ? new Date(raw.effective_at) : null,
+      body: raw.content_markdown,
+    };
+  },
+
+  async sendSupport(message) {
+    const raw = await authedRequest<{ id: string }>('/guardian/support-requests', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey() },
+      body: { message },
+    });
+    return raw.id;
+  },
+
+  async setCsMode(ticket, on) {
+    const path = `/guardian/support-requests/${ticket}/diagnostics`;
+    if (!on) {
+      await authedRequest(path, { method: 'DELETE' });
+      return;
+    }
+    const target = await subject();
+    const binding = await activeBinding(target.id);
+    if (!binding) throw new Error('연결된 기기가 있어야 CS 모드를 켤 수 있어요.');
+    // 지난 하루(연결 이후)의 기기 통신 진단을 하루 동안 상담 담당자에게 보여준다
+    const now = Date.now();
+    const from = Math.max(now - 86_400_000, new Date(binding.started_at).getTime());
+    await authedRequest(path, {
+      method: 'PUT',
+      body: {
+        subject_id: target.id,
+        from_at: new Date(from).toISOString(),
+        until_at: new Date(now).toISOString(),
+        expires_at: new Date(now + 86_000_000).toISOString(),
+      },
+    });
   },
 
   async trend(metric, period, anchor) {

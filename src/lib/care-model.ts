@@ -197,12 +197,54 @@ export type Profile = {
 
 export type NightAlert = 'as-is' | 'morning';
 
+export type QuietHours = { start: string; end: string };
+
 export type NotificationPrefs = {
   fall: boolean;
   inactive: boolean;
   deviceOff: boolean;
   nightAlert: NightAlert;
+  /** 기준선 이탈 알림 (보호자마다 고른다) */
+  baselineDeviation: boolean;
+  /** 방해금지 시간 (HH:mm). null 이면 쓰지 않는다. 긴급 알림은 이 시간에도 온다 */
+  quietHours: QuietHours | null;
+  /** 하루 돌봄 기록 요약 알림 */
+  dailySummary: boolean;
 };
+
+export type DeviceConnection = 'online' | 'offline' | 'unknown';
+
+/** 고른 대상에 연결된 기기 */
+export type DeviceInfo = {
+  id: string;
+  /** 대상-기기 연결 id (해지할 때 쓴다) */
+  bindingId: string | null;
+  place: string | null;
+  kind: DeviceKind | null;
+  model: string | null;
+  firmware: string | null;
+  connection: DeviceConnection;
+  /** 기기가 붙은 Wi-Fi. 서버는 모른다 */
+  network: string | null;
+};
+
+/** 펌웨어 새 버전 확인 결과. null 이면 확인할 수 없다 */
+export type FirmwareCheck = { latest: boolean; version: string | null } | null;
+
+export type ConsentPurpose = 'metrics' | 'photo' | 'video';
+
+export type ConsentItem = {
+  purpose: ConsentPurpose;
+  /** null 이면 아직 고르지 않았다 */
+  granted: boolean | null;
+  decidedAt: Date | null;
+};
+
+export type DeletionKind = 'delete_photos' | 'end_care';
+
+/** 공지 · 안내 문서 */
+export type SupportDoc = { id: string; title: string; effectiveAt: Date | null };
+export type SupportArticle = SupportDoc & { body: string };
 
 /** 계정에 연결된 대상자가 없음 */
 export class NoSubjectError extends Error {
@@ -219,14 +261,16 @@ export type ProfilePatch = {
   place?: string;
 };
 
-/** 내가 만든 6자리 초대 코드 */
-export type Invite = { code: string; expiresAt: Date };
+/** 내가 만든 6자리 초대 코드. validMinutes 는 발급부터 만료까지 */
+export type Invite = { code: string; expiresAt: Date; validMinutes: number };
 
 export type InviteStatus = 'pending' | 'accepted' | 'declined' | 'expired' | 'cancelled';
 
 /** 받은 초대를 수락하기 전에 보여줄 정보 */
 export type InvitePreview = {
   subjectName: string;
+  /** 거실 · 레이더형 */
+  subjectDetail: string | null;
   inviterName: string;
   status: InviteStatus;
   expiresAt: Date;
@@ -271,6 +315,22 @@ export type CareSource = {
   /** 고른 대상의 변경을 실시간으로 받는다 (웹 · 백엔드만). 구독을 끊는 함수를 돌려준다 */
   watch?(onChange: (change: LiveChange) => void): () => void;
   media(key: string): Promise<MediaDay>;
+  /** 고른 대상에 연결된 기기 (지금은 많아야 하나) */
+  devices(): Promise<DeviceInfo[]>;
+  checkFirmware(deviceId: string): Promise<FirmwareCheck>;
+  /** 기기 Wi-Fi 를 바꾼다. 휴대폰 앱이 Bluetooth 로 기기에 전달해야 한다 */
+  changeWifi(deviceId: string, network: string, password: string): Promise<void>;
+  restartDevice(deviceId: string): Promise<void>;
+  unlinkDevice(device: DeviceInfo): Promise<void>;
+  consents(): Promise<ConsentItem[]>;
+  setConsent(purpose: ConsentPurpose, granted: boolean): Promise<void>;
+  requestDeletion(kind: DeletionKind): Promise<void>;
+  documents(): Promise<SupportDoc[]>;
+  document(id: string): Promise<SupportArticle>;
+  /** 문의를 보내고 접수 번호를 돌려준다 */
+  sendSupport(message: string): Promise<string>;
+  /** 접수한 문의에 상담용 기기 진단 공유를 켜거나 끈다 */
+  setCsMode(ticket: string, on: boolean): Promise<void>;
   /** anchor 가 든 기간의 추세 */
   trend(metric: TrendMetric, period: TrendPeriod, anchor: Date): Promise<TrendSeries>;
   /** 로그아웃 시 대상자 등 기억해 둔 값을 버린다 */

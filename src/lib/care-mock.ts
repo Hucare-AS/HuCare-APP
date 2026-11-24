@@ -22,6 +22,7 @@ import {
   type SubjectKind,
   type SubjectSummary,
   type TimelineBar,
+  type ConsentItem,
   type TrendBucket,
   type TrendMissing,
   trendRange,
@@ -139,6 +140,9 @@ type MockSubject = {
   events: MockEvent[];
   profile: Profile;
   records?: Map<string, DayRecord>;
+  /** 기기가 붙은 Wi-Fi */
+  network?: string;
+  consents?: ConsentItem[];
 };
 
 function newSubject(
@@ -325,6 +329,9 @@ const DEFAULT_PREFS: NotificationPrefs = {
   inactive: true,
   deviceOff: false,
   nightAlert: 'as-is',
+  baselineDeviation: true,
+  quietHours: null,
+  dailySummary: false,
 };
 
 /** 목업 알림 설정은 웹 localStorage 에 남긴다 (실제 모드에서는 계정에 저장) */
@@ -356,6 +363,37 @@ const INVITED_ID = 'grandma';
 /** 내가 만든 초대 코드. 시안의 확정 정책대로 10분 동안 쓸 수 있다 */
 const INVITE_CODE = '482917';
 const INVITE_MINUTES = 10;
+/** 목업에서 만료된 코드 (06-C 화면 확인용) */
+const EXPIRED_CODE = '000000';
+
+const FIRMWARE = '1.2.0';
+const MOCK_DOCS = [
+  {
+    id: 'guide',
+    title: 'HuCare 이용 안내',
+    effectiveAt: new Date(2026, 9, 1),
+    body: [
+      '## 기기 연결 상태',
+      '설정의 기기 관리에서 확인할 수 있어요.',
+      '',
+      '## 도움이 필요할 때',
+      '고객지원에서 문의를 접수해 주세요.',
+    ].join('\n'),
+  },
+];
+
+function consentsOf(subject: MockSubject): ConsentItem[] {
+  subject.consents ??= [
+    { purpose: 'metrics', granted: true, decidedAt: new Date(2026, 9, 1) },
+    {
+      purpose: 'photo',
+      granted: subject.device === 'camera' ? true : null,
+      decidedAt: subject.device === 'camera' ? new Date(2026, 9, 1) : null,
+    },
+    { purpose: 'video', granted: null, decidedAt: null },
+  ];
+  return subject.consents;
+}
 
 /** 화면이 로딩 상태를 한 번 거치도록 비동기로 돌려준다 */
 const resolve = <T>(value: T) => Promise.resolve(value);
@@ -436,7 +474,11 @@ export const mockSource: CareSource = {
   },
 
   createInvite: () =>
-    resolve({ code: INVITE_CODE, expiresAt: new Date(NOW.getTime() + INVITE_MINUTES * 60_000) }),
+    resolve({
+      code: INVITE_CODE,
+      expiresAt: new Date(NOW.getTime() + INVITE_MINUTES * 60_000),
+      validMinutes: INVITE_MINUTES,
+    }),
 
   notificationPrefs: () => resolve((prefs ??= loadPrefs())),
 
@@ -483,10 +525,14 @@ export const mockSource: CareSource = {
     }
     return resolve({
       subjectName: '할머니',
+      subjectDetail: '안방 · 레이더형',
       inviterName: '김민수',
-      status: subjects.some((subject) => subject.id === INVITED_ID)
-        ? ('accepted' as const)
-        : ('pending' as const),
+      status:
+        code.trim() === EXPIRED_CODE
+          ? ('expired' as const)
+          : subjects.some((subject) => subject.id === INVITED_ID)
+            ? ('accepted' as const)
+            : ('pending' as const),
       expiresAt: new Date(NOW.getTime() + INVITE_MINUTES * 60_000),
     });
   },
@@ -496,6 +542,9 @@ export const mockSource: CareSource = {
   acceptInvite(code) {
     if (!/^\d{6}$/.test(code.trim())) {
       return Promise.reject(new Error('6자리 숫자 코드를 입력해 주세요.'));
+    }
+    if (code.trim() === EXPIRED_CODE) {
+      return Promise.reject(new Error('초대코드를 확인하거나 새 코드를 요청해 주세요.'));
     }
     if (subjects.some((subject) => subject.id === INVITED_ID)) {
       return Promise.reject(new Error('이미 참여한 대상이에요.'));
@@ -546,6 +595,66 @@ export const mockSource: CareSource = {
       .map((event) => ({ id: event.id, at: event.at, place, title: EVENT_COPY[event.kind].title }));
     return resolve({ supported: true, photos, videos });
   },
+
+  devices() {
+    const subject = current();
+    if (!subject.device) return resolve([]);
+    return resolve([
+      {
+        id: `${subject.id}-device`,
+        bindingId: `${subject.id}-binding`,
+        place: subject.profile.place,
+        kind: subject.device,
+        model: subject.device === 'camera' ? 'HC-C1' : 'HC-R1',
+        firmware: FIRMWARE,
+        connection: subject.offline ? ('offline' as const) : ('online' as const),
+        network: (subject.network ??= '우리집'),
+      },
+    ]);
+  },
+
+  checkFirmware: () => resolve({ latest: true, version: FIRMWARE }),
+
+  changeWifi(_deviceId, network, password) {
+    if (!password) return Promise.reject(new Error('Wi-Fi 비밀번호를 입력해 주세요.'));
+    current().network = network;
+    return resolve(undefined);
+  },
+
+  restartDevice: () => resolve(undefined),
+
+  unlinkDevice() {
+    const subject = current();
+    subject.device = null;
+    subject.offline = false;
+    return resolve(undefined);
+  },
+
+  consents: () => resolve(consentsOf(current()).map((item) => ({ ...item }))),
+
+  setConsent(purpose, granted) {
+    const subject = current();
+    subject.consents = consentsOf(subject).map((item) =>
+      item.purpose === purpose ? { ...item, granted, decidedAt: NOW } : item,
+    );
+    return resolve(undefined);
+  },
+
+  requestDeletion: () => resolve(undefined),
+
+  documents: () => resolve(MOCK_DOCS.map(({ body: _body, ...doc }) => doc)),
+
+  document(id) {
+    const found = MOCK_DOCS.find((doc) => doc.id === id);
+    return found ? resolve(found) : Promise.reject(new Error('문서를 찾을 수 없어요.'));
+  },
+
+  sendSupport(message) {
+    if (!message.trim()) return Promise.reject(new Error('문의 내용을 입력해 주세요.'));
+    return resolve('mock-ticket');
+  },
+
+  setCsMode: () => resolve(undefined),
 
   trend(metric, period, anchor) {
     const subject = current();
