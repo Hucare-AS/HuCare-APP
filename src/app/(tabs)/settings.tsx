@@ -57,12 +57,9 @@ type RowProps = {
 };
 
 function Row({ title, detail, detailClassName, right, raised, onPress }: RowProps) {
-  return (
-    <Pressable
-      disabled={!onPress}
-      onPress={onPress}
-      className={cn('min-h-[50px] flex-row items-center justify-between', raised && 'z-10')}
-    >
+  const className = cn('min-h-[50px] flex-row items-center justify-between', raised && 'z-10');
+  const body = (
+    <>
       <View className="flex-1 gap-1 pr-3">
         <Text className="text-[15px] font-semibold leading-[22px] tracking-[-0.375px]">
           {title}
@@ -70,6 +67,13 @@ function Row({ title, detail, detailClassName, right, raised, onPress }: RowProp
         {detail ? <Text className={cn('leading-[21px]', detailClassName)}>{detail}</Text> : null}
       </View>
       {right}
+    </>
+  );
+  // 누를 수 없는 행을 disabled Pressable 로 두면 웹에서 aria-disabled 가 안쪽 스위치까지 막는다
+  if (!onPress) return <View className={className}>{body}</View>;
+  return (
+    <Pressable onPress={onPress} className={className}>
+      {body}
     </Pressable>
   );
 }

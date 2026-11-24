@@ -13,6 +13,8 @@ import {
   type DayStatus,
   type HomeStatus,
   type Measurement,
+  type SubjectKind,
+  type SubjectSummary,
   type MetricKey,
   type NotificationPrefs,
   type Presence,
@@ -176,28 +178,46 @@ const CALENDAR_STATUS: Record<ApiCalendar['days'][number]['status'], DayStatus |
   future: 'none',
 };
 
-let subjectPromise: Promise<ApiSubject> | null = null;
+/** 한 계정에서 불러올 대상 수 (백엔드 기본값) */
+const SUBJECT_LIMIT = 50;
+
+let listPromise: Promise<ApiSubject[]> | null = null;
+let selectedId: string | null = null;
 let prefsVersion: number | null = null;
 
-/** 보호자 계정의 첫 번째 대상자. 여러 명을 고르는 화면은 아직 없다. */
-function subject() {
-  subjectPromise ??= authedRequest<Page<ApiSubject>>('/guardian/subjects', {
-    query: { limit: 1 },
-  }).then((page) => {
-    const first = page.items[0];
-    if (!first) throw new NoSubjectError();
-    return first;
-  });
+function subjectList() {
+  listPromise ??= authedRequest<Page<ApiSubject>>('/guardian/subjects', {
+    query: { limit: SUBJECT_LIMIT },
+  }).then((page) => page.items);
   // 실패했으면 다음 호출에서 다시 시도한다
-  subjectPromise.catch(() => {
-    subjectPromise = null;
+  listPromise.catch(() => {
+    listPromise = null;
   });
-  return subjectPromise;
+  return listPromise;
 }
 
-async function home() {
-  const { id } = await subject();
-  return authedRequest<ApiHome>('/guardian/home', { query: { subject_id: id } });
+/** 고른 대상. 고르지 않았거나 목록에서 사라졌으면 첫 번째 대상 */
+async function subject() {
+  const items = await subjectList();
+  const found = items.find((item) => item.id === selectedId) ?? items[0];
+  if (!found) throw new NoSubjectError();
+  return found;
+}
+
+const SUBJECT_KIND: Record<ApiSubject['type'], SubjectKind> = { elderly: 'elder', infant: 'child' };
+
+/** 초대 링크 `.../{id}?token={43자}` 에서 id 와 token 을 꺼낸다 */
+function parseInvite(text: string) {
+  const match =
+    /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\?token=([A-Za-z0-9_-]{43})/i.exec(
+      text.trim(),
+    );
+  return match ? { id: match[1], token: match[2] } : null;
+}
+
+async function home(id?: string) {
+  const subjectId = id ?? (await subject()).id;
+  return authedRequest<ApiHome>('/guardian/home', { query: { subject_id: subjectId } });
 }
 
 async function fetchPrefs() {
@@ -261,6 +281,7 @@ export const apiSource: CareSource = {
     return {
       guardianName: currentUser()?.displayName ?? '',
       subjectLabel: subjectLabel(raw.subject),
+      device: null,
       place: raw.device?.location ?? null,
       presence: raw.presence.state,
       status: raw.status.code,
@@ -366,8 +387,74 @@ export const apiSource: CareSource = {
     if (patch.careCenterPhone) await saveContact('care_center', patch.careCenterPhone);
   },
 
+  async subjects() {
+    const items = await subjectList();
+    return Promise.all(
+      items.map(async (item): Promise<SubjectSummary> => {
+        const [raw, summary] = await Promise.all([
+          home(item.id),
+          authedRequest<{ unacknowledged_count: number }>('/guardian/events/summary', {
+            query: { subject_id: item.id },
+          }),
+        ]);
+        return {
+          id: item.id,
+          label: subjectLabel(item),
+          kind: SUBJECT_KIND[item.type],
+          place: raw.device?.location ?? null,
+          device: null,
+          status: raw.status.code,
+          statusMessage: raw.status.message,
+          presence: raw.presence.state,
+          primaryEventTitle: raw.primary_event?.title ?? null,
+          latest: raw.latest_measurement ? toMeasurement(raw.latest_measurement) : null,
+          unackedCount: summary.unacknowledged_count,
+        };
+      }),
+    );
+  },
+
+  setSubject(id) {
+    if (id === selectedId) return;
+    selectedId = id;
+    prefsVersion = null;
+  },
+
+  async createSubject({ kind, name }) {
+    if (kind === 'pet') throw new Error('반려동물 등록은 아직 지원하지 않아요.');
+    // 연령대 · 설치 장소는 대상 생성 API 에 항목이 없어 보내지 않는다 (장소는 기기 연결 때 정해진다)
+    const created = await authedRequest<ApiSubject>('/guardian/subjects', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey() },
+      body: { name, type: kind === 'elder' ? 'elderly' : 'infant', relationship: name },
+    });
+    listPromise = null;
+    return created.id;
+  },
+
+  async joinByInvite(code) {
+    const invite = parseInvite(code);
+    if (!invite) throw new Error('받은 초대 링크를 그대로 붙여 넣어 주세요.');
+    await authedRequest(`/guardian/invitations/${invite.id}/accept`, {
+      method: 'POST',
+      body: { token: invite.token },
+    });
+    listPromise = null;
+  },
+
+  inviteInput: {
+    label: '초대 링크',
+    placeholder: '받은 초대 링크를 붙여 넣어 주세요',
+    hint: '초대 링크는 7일 동안 쓸 수 있어요. 만료됐다면 새 링크를 요청하세요.',
+  },
+
+  async media() {
+    return { supported: false, reason: '사진·영상은 아직 준비 중이에요.' };
+  },
+
   reset() {
-    subjectPromise = null;
+    listPromise = null;
+    selectedId = null;
     prefsVersion = null;
   },
 };

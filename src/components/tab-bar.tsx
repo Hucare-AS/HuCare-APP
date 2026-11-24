@@ -17,6 +17,8 @@ const TAB_ICONS: Record<string, { idle: IconName; active: IconName }> = {
 /** 탭 안에 중첩된 스택에서 탭바를 숨겨야 하는 화면 (탭 이름 기준) */
 const HIDDEN_ON: Record<string, string[]> = {
   records: ['day'],
+  // 대상 등록 · 초대 코드 입력 시안(976:4791 · 976:4828)에는 탭바가 없다
+  home: ['register', 'join'],
 };
 
 /**

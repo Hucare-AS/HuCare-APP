@@ -27,6 +27,12 @@ module.exports = {
           ok: '#34A853',
           alert: '#FF5521',
         },
+        /** 대상 카드 상태 문구 (Figma hc/red · hc/green) · 입력 칸 테두리 (hc/line) */
+        care: {
+          red: '#B83232',
+          green: '#245C53',
+          line: '#E2E6E2',
+        },
         /** 건강 지표별 숫자 색 */
         metric: {
           heart: '#FF5521',
@@ -57,6 +63,7 @@ module.exports = {
         card: '0 4px 10px rgba(0, 0, 0, 0.1)',
         badge: '0 4px 10px rgba(255, 146, 50, 0.1)',
         shortcut: '0 2px 4px rgba(0, 0, 0, 0.1)',
+        subject: '0 4px 5px rgba(0, 0, 0, 0.1)',
         tabbar: '0 0 40px rgba(0, 0, 0, 0.15)',
       },
       maxWidth: {

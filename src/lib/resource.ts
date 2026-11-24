@@ -124,6 +124,21 @@ export function mutate<T>(key: string, update: (current: T | undefined) => T) {
   setSnapshot(entry, { data: update(entry.snapshot.data as T | undefined) });
 }
 
+/**
+ * 조건에 맞는 값을 버리고 처음부터 다시 불러오게 한다. (대상을 바꿨을 때 이전 대상 값을 보여주지 않도록)
+ * 진행 중이던 요청은 버린 항목에만 결과를 쓰므로 새 값과 섞이지 않는다.
+ */
+export function forget(match: (key: string) => boolean) {
+  let changed = false;
+  for (const key of [...entries.keys()]) {
+    if (match(key)) {
+      entries.delete(key);
+      changed = true;
+    }
+  }
+  if (changed) notify();
+}
+
 /** 로그아웃 등으로 모든 값을 버린다. 진행 중인 요청의 결과도 무시한다. */
 export function clearResources() {
   generation += 1;

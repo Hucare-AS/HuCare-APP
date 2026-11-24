@@ -5,7 +5,8 @@ import { ApiError, isApiMode, request, type RequestOptions } from '@/lib/api';
 
 /**
  * 보호자 로그인 세션.
- * 웹: localStorage 에 저장한다. 네이티브: 아직 영속 저장소가 없어 메모리에만 둔다 (앱 재시작 시 다시 로그인).
+ * 웹: "로그인 유지하기"를 켜면 localStorage, 끄면 sessionStorage(브라우저를 닫으면 로그아웃)에 저장한다.
+ * 네이티브: 아직 영속 저장소가 없어 메모리에만 둔다 (앱 재시작 시 다시 로그인).
  * 목업 모드에서는 항상 로그인된 시연 계정이다.
  */
 export type AuthUser = { id: string; displayName: string };
@@ -36,26 +37,37 @@ const SIGNED_OUT: AuthState = { status: 'signedOut' };
 /** 만료 직전 토큰으로 요청하지 않도록 30초 일찍 갱신한다 */
 const EXPIRY_MARGIN_MS = 30_000;
 
-function webStorage(): Storage | null {
+type StorageKind = 'localStorage' | 'sessionStorage';
+
+function webStorage(kind: StorageKind): Storage | null {
   if (Platform.OS !== 'web' || typeof window === 'undefined') return null;
   try {
-    return window.localStorage;
+    return window[kind];
   } catch {
     return null;
   }
 }
 
 let session: Session | null = null;
+/** 지금 세션을 둔 저장소 */
+let storageKind: StorageKind = 'localStorage';
 let state: AuthState | null = isApiMode ? null : { status: 'signedIn', user: DEMO_USER };
 const listeners = new Set<() => void>();
 const signOutListeners = new Set<() => void>();
 
 function load(): AuthState {
-  try {
-    const saved = webStorage()?.getItem(STORAGE_KEY);
-    session = saved ? (JSON.parse(saved) as Session) : null;
-  } catch {
-    session = null;
+  session = null;
+  for (const kind of ['localStorage', 'sessionStorage'] as const) {
+    try {
+      const saved = webStorage(kind)?.getItem(STORAGE_KEY);
+      if (saved) {
+        session = JSON.parse(saved) as Session;
+        storageKind = kind;
+        break;
+      }
+    } catch {
+      // 읽을 수 없는 저장소는 건너뛴다
+    }
   }
   return session ? { status: 'signedIn', user: session.user } : SIGNED_OUT;
 }
@@ -65,8 +77,9 @@ function setSession(next: Session | null) {
   session = next;
   state = next ? { status: 'signedIn', user: next.user } : SIGNED_OUT;
   try {
-    if (next) webStorage()?.setItem(STORAGE_KEY, JSON.stringify(next));
-    else webStorage()?.removeItem(STORAGE_KEY);
+    webStorage('localStorage')?.removeItem(STORAGE_KEY);
+    webStorage('sessionStorage')?.removeItem(STORAGE_KEY);
+    if (next) webStorage(storageKind)?.setItem(STORAGE_KEY, JSON.stringify(next));
   } catch {
     // 저장이 막혀 있으면 메모리 세션으로만 동작한다
   }
@@ -111,12 +124,19 @@ export function onSignOut(listener: () => void) {
   };
 }
 
-export async function login(email: string, password: string) {
+/** remember: 로그인 유지하기. 끄면 브라우저를 닫을 때 로그아웃된다 */
+export async function login(email: string, password: string, remember = true) {
   const view = await request<SessionView>('/auth/login', {
     method: 'POST',
     body: { email: email.trim(), password },
   });
+  storageKind = remember ? 'localStorage' : 'sessionStorage';
   setSession(fromView(view));
+}
+
+/** 비밀번호 재설정 메일을 보낸다 */
+export async function requestPasswordReset(email: string) {
+  await request('/auth/recovery-requests', { method: 'POST', body: { email: email.trim() } });
 }
 
 /** 가입 후 이메일 인증이 필요하면 'CONFIRM_EMAIL', 바로 로그인했으면 'LOGGED_IN' */

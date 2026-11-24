@@ -1,7 +1,7 @@
 import { View } from 'react-native';
 
 import { LoadState } from '@/components/load-state';
-import { MeasurementBlock, RecordTabs, SummaryCard } from '@/components/records';
+import { MeasurementBlock, RecordTabs, SummaryCard, TrendLink } from '@/components/records';
 import { TabScreen } from '@/components/tab-screen';
 import { Text } from '@/components/ui/text';
 import { todayKey, useDayRecord } from '@/lib/care';
@@ -41,6 +41,7 @@ export default function TodayRecordScreen() {
         <Text variant="note" className="mt-6">
           비어 있는 시간이 있어도 괜찮아요. 카메라 앞에 계실 때만 확인됩니다.
         </Text>
+        <TrendLink />
       </View>
     </TabScreen>
   );

@@ -38,6 +38,15 @@ export const icons = {
   selectChevron: require('@/assets/icons/select-chevron.svg'),
   /** > 방향 (6.4×10) */
   rowChevron: require('@/assets/icons/row-chevron.svg'),
+  /** 로그인 · 회원가입 (Figma 946:1159 · 946:1250) */
+  google: require('@/assets/icons/google.svg'),
+  eye: require('@/assets/icons/eye.svg'),
+  /** 393×57 흰 헤더 + 왼쪽 < 화살표 */
+  backHeader: require('@/assets/icons/back-header.svg'),
+  /** 로그인 유지하기 꺼짐 (19×17) */
+  keepCircle: require('@/assets/icons/keep-circle.svg'),
+  /** 생년월일 드롭다운 ∨ (9×5.5) */
+  birthdayChevron: require('@/assets/icons/birthday-chevron.svg'),
 } as const;
 
 export type IconName = keyof typeof icons;

@@ -32,10 +32,47 @@ export type Presence = 'present' | 'absent' | 'measuring' | 'difficult' | 'unkno
 /** 홈 보드 상태. 백엔드 /guardian/home 의 status.code 와 같다 */
 export type HomeStatus = 'alert' | 'offline' | 'no_measurement' | 'unknown' | 'changed' | 'ok';
 
+/** 돌봄 대상 종류. 백엔드는 아직 반려동물을 받지 않는다 */
+export type SubjectKind = 'elder' | 'child' | 'pet';
+
+/** 카메라형만 사진·영상을 볼 수 있다. 백엔드가 기기 모델을 알려주지 않으면 null */
+export type DeviceKind = 'camera' | 'radar';
+
+/** 홈 대상 목록 카드 (Figma 976:4495) */
+export type SubjectSummary = {
+  id: string;
+  label: string;
+  kind: SubjectKind;
+  place: string | null;
+  device: DeviceKind | null;
+  status: HomeStatus;
+  statusMessage: string;
+  presence: Presence;
+  /** 확인이 필요한 가장 중요한 알림 제목 */
+  primaryEventTitle: string | null;
+  latest: Measurement | null;
+  unackedCount: number;
+};
+
+export type NewSubject = {
+  kind: SubjectKind;
+  name: string;
+  /** 연령대 · 종·크기 */
+  info: string | null;
+  place: string;
+};
+
+export type Photo = { id: string; at: Date; place: string; title: string };
+
+/** 사진 · 이벤트 영상. supported 가 false 면 이유를 보여준다 */
+export type MediaDay =
+  { supported: true; photos: Photo[]; videos: Photo[] } | { supported: false; reason: string };
+
 export type HomeSummary = {
   guardianName: string;
   /** 대상자 호칭 (예: 어머니). 없으면 이름 */
   subjectLabel: string;
+  device: DeviceKind | null;
   /** 기기 설치 장소 */
   place: string | null;
   presence: Presence;
@@ -117,6 +154,17 @@ export type CareSource = {
   acknowledge(id: string): Promise<CareEvent>;
   /** 대상자 전화번호·돌봄센터 연락처 저장 */
   saveContacts(patch: ContactsPatch): Promise<void>;
+  /** 계정의 모든 돌봄 대상 */
+  subjects(): Promise<SubjectSummary[]>;
+  /** 이후 조회할 대상. null 이면 첫 번째 대상 */
+  setSubject(id: string | null): void;
+  /** 새 대상을 만들고 id 를 돌려준다 */
+  createSubject(input: NewSubject): Promise<string>;
+  /** 초대 코드(목업) 또는 초대 링크(백엔드)로 다른 보호자의 대상에 참여한다 */
+  joinByInvite(code: string): Promise<void>;
+  /** 초대 입력 칸 안내. 백엔드는 6자리 코드가 아니라 초대 링크를 쓴다 */
+  readonly inviteInput: { label: string; placeholder: string; hint: string };
+  media(key: string): Promise<MediaDay>;
   /** 로그아웃 시 대상자 등 기억해 둔 값을 버린다 */
   reset(): void;
 };

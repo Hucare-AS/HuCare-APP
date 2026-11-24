@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Pressable, View } from 'react-native';
 
 import { LoadState } from '@/components/load-state';
-import { RecordTabs, SummaryCard } from '@/components/records';
+import { RecordTabs, SummaryCard, TrendLink } from '@/components/records';
 import { TabScreen } from '@/components/tab-screen';
 import { Icon } from '@/components/ui/icon';
 import { Text } from '@/components/ui/text';
@@ -156,6 +156,7 @@ export default function MonthRecordScreen() {
         <Text variant="note" className="mt-6">
           날짜를 누르면 그날 기록을 자세히 볼 수 있어요.
         </Text>
+        <TrendLink />
       </View>
     </TabScreen>
   );

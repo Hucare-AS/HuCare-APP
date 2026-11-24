@@ -48,7 +48,8 @@ function LegendDot({ label, className }: { label: string; className: string }) {
   );
 }
 
-export default function HomeScreen() {
+/** 한 대상의 대시보드 (Figma 818:552 · 818:1030). 대상이 1명이면 홈, 여러 명이면 대상 카드를 눌러 들어온다. */
+export function HomeBoard() {
   const homeResource = useHome();
   const home = homeResource.data;
   const phone = useProfile().data?.phone ?? null;
@@ -163,6 +164,11 @@ export default function HomeScreen() {
               </View>
             </View>
           </View>
+
+          {/* 사진은 카메라형 기기만 남긴다 (레이더형은 숨김) */}
+          {home.device === 'camera' ? (
+            <Button label="사진 보기" variant="ghost" onPress={() => router.push('/home/photos')} />
+          ) : null}
         </View>
       </ScrollView>
     </Screen>
