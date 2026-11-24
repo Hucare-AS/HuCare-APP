@@ -2,9 +2,12 @@ import { Redirect, Tabs } from 'expo-router';
 
 import { TabBar } from '@/components/tab-bar';
 import { useAuth } from '@/lib/auth';
+import { useLiveUpdates } from '@/lib/care';
 
 export default function TabLayout() {
   const auth = useAuth();
+  // 고른 대상의 변경을 실시간으로 받아 화면을 새로 고친다 (웹 · 백엔드 모드)
+  useLiveUpdates(auth.status === 'signedIn');
 
   // 저장된 세션을 읽기 전(정적 렌더링 · 하이드레이션 중)에는 아무것도 그리지 않는다
   if (auth.status === 'unknown') return null;

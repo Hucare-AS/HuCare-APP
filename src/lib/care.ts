@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { Platform } from 'react-native';
 
 import { isApiMode } from '@/lib/api';
@@ -11,10 +11,10 @@ import {
   metricValues,
   type CareEvent,
   type CareSource,
-  type ContactsPatch,
   type DayRecord,
   type NewSubject,
   type NotificationPrefs,
+  type ProfilePatch,
 } from '@/lib/care-model';
 import { clearResources, forget, invalidate, mutate, useResource } from '@/lib/resource';
 
@@ -114,10 +114,38 @@ export async function createSubject(input: NewSubject) {
   return id;
 }
 
+/** 받은 초대가 누구의 어떤 대상인지 확인한다 */
+export const previewInvite = (code: string) => source.previewInvite(code);
+
 /** 초대받은 대상에 참여한다 */
-export async function joinByInvite(code: string) {
-  await source.joinByInvite(code);
+export async function acceptInvite(code: string) {
+  await source.acceptInvite(code);
   invalidate((key) => key === 'subjects');
+}
+
+export const declineInvite = (code: string) => source.declineInvite(code);
+
+/** 함께 볼 가족에게 보낼 초대를 만든다 */
+export const createInvite = () => source.createInvite();
+
+/**
+ * 고른 대상의 변경을 실시간으로 받아 화면 값을 새로 불러온다 (웹 · 백엔드 모드).
+ * 권한이 회수되면 대상 목록부터 다시 읽는다.
+ */
+export function useLiveUpdates(enabled: boolean) {
+  const selected = useSelectedSubjectId();
+  useEffect(() => {
+    if (!enabled || !source.watch) return;
+    readSelected();
+    return source.watch((change) => {
+      if (change === 'membership_revoked') {
+        writeSelected(null);
+        forget(() => true);
+      } else {
+        invalidate((key) => key !== 'prefs');
+      }
+    });
+  }, [enabled, selected]);
 }
 
 /** 초대 입력 칸 문구 (목업: 6자리 코드, 백엔드: 초대 링크) */
@@ -317,10 +345,24 @@ export async function acknowledgeEvent(id: string) {
   return event;
 }
 
-/** 전화번호·돌봄센터 연락처를 저장하고 프로필을 다시 불러온다 */
-export async function saveContacts(patch: ContactsPatch) {
-  await source.saveContacts(patch);
-  invalidate((key) => key === 'profile');
+/** 연락처 저장·삭제, 설치 장소 저장. 실패해도 서버 값으로 다시 불러온다 */
+export async function saveProfile(patch: ProfilePatch) {
+  try {
+    await source.saveProfile(patch);
+  } finally {
+    invalidate((key) => key === 'profile' || key === 'home' || key === 'subjects');
+  }
+}
+
+/** 함께 보는 가족을 내보낸다. 나를 내보내면 이 대상에서 나가고 첫 번째 대상으로 돌아간다 */
+export async function removeMember(id: string, me: boolean) {
+  await source.removeMember(id);
+  if (me) {
+    writeSelected(null);
+    forget(() => true);
+  } else {
+    invalidate((key) => key === 'profile');
+  }
 }
 
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];

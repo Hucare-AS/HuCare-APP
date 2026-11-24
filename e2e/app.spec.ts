@@ -55,8 +55,48 @@ test('초대 코드로 참여하면 대상이 늘어난다', async ({ page }) =>
 
   await page.getByRole('textbox', { name: '6자리 초대 코드' }).fill('482917');
   await page.getByRole('button', { name: '초대 확인' }).click();
+  await expect(page.getByText('김민수님이 할머니 돌봄에 초대했어요')).toBeVisible();
+
+  await page.getByRole('button', { name: '참여하기' }).click();
   await expect(page).toHaveURL(/\/home$/);
   await expect(page.getByText('돌봄 대상 4명')).toBeVisible();
+});
+
+test('받은 초대를 거절할 수 있다', async ({ page }) => {
+  await page.goto('/home/join');
+  await page.getByRole('textbox', { name: '6자리 초대 코드' }).fill('482917');
+  await page.getByRole('button', { name: '초대 확인' }).click();
+  await page.getByRole('button', { name: '거절하기' }).click();
+  await expect(page.getByText('초대를 거절했어요.')).toBeVisible();
+});
+
+test('설정에서 설치 장소를 저장하고 연락처를 지운다', async ({ page }) => {
+  await page.goto('/settings');
+  await page.getByRole('button', { name: /기기 설치 장소/ }).click();
+  await page.getByRole('button', { name: '설치 장소 수정' }).click();
+  await page.getByRole('textbox', { name: '기기 설치 장소' }).fill('안방');
+  await page.getByRole('button', { name: '설치 장소 저장' }).click();
+  await expect(page.getByRole('button', { name: '설치 장소 수정' })).toBeVisible();
+  await page.getByRole('button', { name: '닫기' }).click();
+  await expect(page.getByText('안방')).toBeVisible();
+
+  await page.getByRole('button', { name: /돌봄센터 연락처/ }).click();
+  await page.getByRole('button', { name: '연락처 수정' }).click();
+  await page.getByRole('textbox', { name: '돌봄센터 연락처' }).fill('');
+  await page.getByRole('button', { name: '연락처 저장' }).click();
+  await page.getByRole('button', { name: '닫기' }).click();
+  await expect(page.getByText('011-0000-0000')).toBeHidden();
+});
+
+test('함께 보는 가족에게 초대 코드를 만들고 가족을 내보낸다', async ({ page }) => {
+  await page.goto('/settings');
+  await page.getByRole('button', { name: /함께 보는 가족/ }).click();
+  await page.getByRole('button', { name: '추가하기' }).click();
+  await expect(page.getByText('482917')).toBeVisible();
+
+  await page.getByRole('button', { name: '동생', exact: true }).click();
+  await page.getByRole('button', { name: '내보내기' }).click();
+  await expect(page.getByRole('button', { name: '동생', exact: true })).toBeHidden();
 });
 
 test('추세 그래프에서 기간과 지표를 바꾼다', async ({ page }) => {

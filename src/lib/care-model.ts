@@ -112,12 +112,21 @@ export type MonthRecord = {
   eventCount: number;
 };
 
+export type FamilyMember = {
+  id: string;
+  /** 내 계정이면 "나" */
+  name: string;
+  me: boolean;
+};
+
 export type Profile = {
   subjectLabel: string;
   phone: string | null;
   place: string | null;
   /** 함께 보는 가족 (나 포함) */
-  family: string[];
+  family: FamilyMember[];
+  /** 주 보호자만 가족을 초대하거나 내보낼 수 있다 */
+  canManage: boolean;
   careCenterPhone: string | null;
 };
 
@@ -138,7 +147,28 @@ export class NoSubjectError extends Error {
   }
 }
 
-export type ContactsPatch = { phone?: string; careCenterPhone?: string };
+/** null 이면 지운다. 설치 장소는 기기에 저장되므로 지울 수 없다 */
+export type ProfilePatch = {
+  phone?: string | null;
+  careCenterPhone?: string | null;
+  place?: string;
+};
+
+/** 내가 만든 초대. code 는 목업이면 6자리 코드, 백엔드면 초대 링크 */
+export type Invite = { code: string; expiresAt: Date };
+
+export type InviteStatus = 'pending' | 'accepted' | 'declined' | 'expired' | 'cancelled';
+
+/** 받은 초대를 수락하기 전에 보여줄 정보 */
+export type InvitePreview = {
+  subjectName: string;
+  inviterName: string;
+  status: InviteStatus;
+  expiresAt: Date;
+};
+
+/** 실시간 변경 알림 종류. membership_revoked 면 대상 목록부터 다시 읽는다 */
+export type LiveChange = 'changed' | 'membership_revoked';
 
 export type CareSource = {
   /** 화면의 "지금". 목업은 Figma 시안 시각으로 고정돼 있다 */
@@ -152,18 +182,26 @@ export type CareSource = {
   notificationPrefs(): Promise<NotificationPrefs>;
   updateNotificationPrefs(patch: Partial<NotificationPrefs>): Promise<NotificationPrefs>;
   acknowledge(id: string): Promise<CareEvent>;
-  /** 대상자 전화번호·돌봄센터 연락처 저장 */
-  saveContacts(patch: ContactsPatch): Promise<void>;
+  /** 전화번호·돌봄센터 연락처 저장·삭제, 기기 설치 장소 저장 */
+  saveProfile(patch: ProfilePatch): Promise<void>;
+  /** 함께 보는 가족을 내보낸다. 나를 고르면 이 대상의 돌봄에서 나간다 */
+  removeMember(id: string): Promise<void>;
+  /** 함께 볼 가족을 부를 초대를 만든다 */
+  createInvite(): Promise<Invite>;
   /** 계정의 모든 돌봄 대상 */
   subjects(): Promise<SubjectSummary[]>;
   /** 이후 조회할 대상. null 이면 첫 번째 대상 */
   setSubject(id: string | null): void;
   /** 새 대상을 만들고 id 를 돌려준다 */
   createSubject(input: NewSubject): Promise<string>;
-  /** 초대 코드(목업) 또는 초대 링크(백엔드)로 다른 보호자의 대상에 참여한다 */
-  joinByInvite(code: string): Promise<void>;
+  /** 초대 코드(목업) 또는 초대 링크(백엔드)로 받은 초대를 확인한다 */
+  previewInvite(code: string): Promise<InvitePreview>;
+  acceptInvite(code: string): Promise<void>;
+  declineInvite(code: string): Promise<void>;
   /** 초대 입력 칸 안내. 백엔드는 6자리 코드가 아니라 초대 링크를 쓴다 */
   readonly inviteInput: { label: string; placeholder: string; hint: string };
+  /** 고른 대상의 변경을 실시간으로 받는다 (웹 · 백엔드만). 구독을 끊는 함수를 돌려준다 */
+  watch?(onChange: (change: LiveChange) => void): () => void;
   media(key: string): Promise<MediaDay>;
   /** 로그아웃 시 대상자 등 기억해 둔 값을 버린다 */
   reset(): void;

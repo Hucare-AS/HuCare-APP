@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { Platform } from 'react-native';
 
-import { ApiError, isApiMode, request, type RequestOptions } from '@/lib/api';
+import { ApiError, buildUrl, isApiMode, request, type RequestOptions } from '@/lib/api';
 
 /**
  * 보호자 로그인 세션.
@@ -134,9 +134,49 @@ export async function login(email: string, password: string, remember = true) {
   setSession(fromView(view));
 }
 
+/** 재설정 메일의 링크로 돌아왔을 때 쓸 요청 id. 같은 브라우저에서만 이어서 할 수 있다 */
+const RECOVERY_KEY = 'hucare.recovery.v1';
+
 /** 비밀번호 재설정 메일을 보낸다 */
 export async function requestPasswordReset(email: string) {
-  await request('/auth/recovery-requests', { method: 'POST', body: { email: email.trim() } });
+  const result = await request<{ request_id: string }>('/auth/recovery-requests', {
+    method: 'POST',
+    body: { email: email.trim() },
+  });
+  try {
+    webStorage('localStorage')?.setItem(RECOVERY_KEY, result.request_id);
+  } catch {
+    // 저장이 막혀 있으면 재설정 화면에서 다시 요청하라고 안내한다
+  }
+}
+
+/**
+ * 메일 링크의 token_hash 로 새 비밀번호를 정한다.
+ * 백엔드는 Supabase 복구 메일을 쓰므로, 메일 링크가 /reset-password?token_hash=... 로 오도록 Supabase 템플릿 설정이 필요하다.
+ */
+export async function completePasswordReset(tokenHash: string, password: string) {
+  let requestId: string | null = null;
+  try {
+    requestId = webStorage('localStorage')?.getItem(RECOVERY_KEY) ?? null;
+  } catch {
+    requestId = null;
+  }
+  if (!requestId) {
+    throw new ApiError(
+      0,
+      'RECOVERY_UNAVAILABLE',
+      '이 브라우저에서 비밀번호 찾기를 다시 요청해 주세요.',
+    );
+  }
+  await request(`/auth/recovery-requests/${requestId}/complete`, {
+    method: 'POST',
+    body: { token_hash: tokenHash, password },
+  });
+  try {
+    webStorage('localStorage')?.removeItem(RECOVERY_KEY);
+  } catch {
+    // 지우지 못해도 다음 요청 때 덮어쓴다
+  }
 }
 
 /** 가입 후 이메일 인증이 필요하면 'CONFIRM_EMAIL', 바로 로그인했으면 'LOGGED_IN' */
@@ -191,8 +231,8 @@ function refreshSession(stale: Session): Promise<Session | null> {
 
 const signedOutError = () => new ApiError(401, 'UNAUTHENTICATED', '다시 로그인해 주세요.');
 
-/** 액세스 토큰을 붙여 보내고, 만료됐으면 한 번 갱신한 뒤 다시 보낸다 */
-export async function authedRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+/** 만료 직전이면 갱신한 액세스 토큰 */
+async function freshSession() {
   getState();
   let current = session;
   if (!current) throw signedOutError();
@@ -200,6 +240,30 @@ export async function authedRequest<T>(path: string, options: RequestOptions = {
     current = await refreshSession(current);
     if (!current) throw signedOutError();
   }
+  return current;
+}
+
+/** 응답 본문을 직접 읽어야 하는 요청 (SSE). 실패하면 ApiError */
+export async function authedStream(
+  path: string,
+  query: Record<string, string>,
+  signal: AbortSignal,
+): Promise<Response> {
+  const current = await freshSession();
+  const response = await fetch(buildUrl(path, query), {
+    headers: { Accept: 'text/event-stream', Authorization: `Bearer ${current.accessToken}` },
+    signal,
+  });
+  if (response.status === 401) await refreshSession(current);
+  if (!response.ok || !response.body) {
+    throw new ApiError(response.status, 'STREAM_ERROR', '실시간 연결이 끊겼어요.');
+  }
+  return response;
+}
+
+/** 액세스 토큰을 붙여 보내고, 만료됐으면 한 번 갱신한 뒤 다시 보낸다 */
+export async function authedRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const current = await freshSession();
   try {
     return await request<T>(path, { ...options, token: current.accessToken });
   } catch (error) {

@@ -13,7 +13,9 @@ import { Toggle } from '@/components/ui/toggle';
 import { isApiMode } from '@/lib/api';
 import { logout, useAuth } from '@/lib/auth';
 import {
-  saveContacts,
+  createInvite,
+  removeMember,
+  saveProfile,
   updateNotificationPrefs,
   useNotificationPrefs,
   useProfile,
@@ -72,7 +74,7 @@ function Row({ title, detail, detailClassName, right, raised, onPress }: RowProp
   // 누를 수 없는 행을 disabled Pressable 로 두면 웹에서 aria-disabled 가 안쪽 스위치까지 막는다
   if (!onPress) return <View className={className}>{body}</View>;
   return (
-    <Pressable onPress={onPress} className={className}>
+    <Pressable accessibilityRole="button" onPress={onPress} className={className}>
       {body}
     </Pressable>
   );
@@ -142,8 +144,6 @@ function NotificationSection() {
 function ProfileSection() {
   const resource = useProfile();
   const profile = resource.data;
-  // ponytail: 설치 장소·가족은 수정 API 미확인이라 화면 state로만 덮어쓴다. 전화번호·돌봄센터 연락처는 서버에 저장.
-  const [edits, setEdits] = useState<Partial<SubjectInfo>>({});
   const [field, setField] = useState<SubjectField | null>(null);
 
   if (!profile) return <LoadState resource={resource} className="py-4" />;
@@ -153,7 +153,6 @@ function ProfileSection() {
     place: profile.place ?? '',
     family: profile.family,
     careCenterPhone: profile.careCenterPhone ?? '',
-    ...edits,
   };
   const open = (f: SubjectField) => () => setField(f);
 
@@ -179,7 +178,9 @@ function ProfileSection() {
         />
         <Row
           title="함께 보는 가족"
-          detail={info.family.length ? info.family.join(', ') : NOT_SET}
+          detail={
+            info.family.length ? info.family.map((member) => member.name).join(', ') : NOT_SET
+          }
           right={chevron}
           onPress={open('family')}
         />
@@ -194,19 +195,15 @@ function ProfileSection() {
         title={profile.subjectLabel}
         field={field}
         info={info}
-        onSave={(patch) => {
-          const { place, family } = patch;
-          if (place !== undefined || family !== undefined) {
-            setEdits((prev) => ({
-              ...prev,
-              ...(place !== undefined && { place }),
-              ...(family && { family }),
-            }));
-          }
-          saveContacts({ phone: patch.phone, careCenterPhone: patch.careCenterPhone }).catch(
-            () => {},
-          );
+        canManage={profile.canManage}
+        onSave={(target, value) =>
+          saveProfile(target === 'place' ? { place: value ?? '' } : { [target]: value })
+        }
+        onRemove={async (member) => {
+          await removeMember(member.id, member.me);
+          if (member.me) router.navigate('/home');
         }}
+        onInvite={createInvite}
         onClose={() => setField(null)}
       />
     </View>

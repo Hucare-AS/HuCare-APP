@@ -12,6 +12,7 @@ import {
   type DayRecord,
   type DayStatus,
   type DeviceKind,
+  type FamilyMember,
   type HomeStatus,
   type Measurement,
   type MetricKey,
@@ -152,11 +153,14 @@ function newSubject(
       subjectLabel: fields.label,
       phone: null,
       place: fields.place,
-      family: ['나'],
+      family: [ME],
+      canManage: true,
       careCenterPhone: null,
     },
   };
 }
+
+const ME: FamilyMember = { id: 'member-me', name: '나', me: true };
 
 /** 홈 대상 목록 시안(976:4495)의 세 대상. 어머니가 기존 화면 시안의 데이터다 */
 let subjects: MockSubject[] = [
@@ -187,7 +191,8 @@ let subjects: MockSubject[] = [
       subjectLabel: '어머니',
       phone: '010-0000-0000',
       place: '거실',
-      family: ['나', '동생'],
+      family: [ME, { id: 'member-sibling', name: '동생', me: false }],
+      canManage: true,
       careCenterPhone: '011-0000-0000',
     },
   }),
@@ -345,6 +350,10 @@ let prefs: NotificationPrefs | null = null;
 /** 초대 코드로 참여하면 생기는 대상 */
 const INVITED_ID = 'grandma';
 
+/** 내가 만든 초대 코드. 시안의 확정 정책대로 10분 동안 쓸 수 있다 */
+const INVITE_CODE = '482917';
+const INVITE_MINUTES = 10;
+
 /** 화면이 로딩 상태를 한 번 거치도록 비동기로 돌려준다 */
 const resolve = <T>(value: T) => Promise.resolve(value);
 
@@ -397,15 +406,34 @@ export const mockSource: CareSource = {
 
   profile: () => resolve(current().profile),
 
-  saveContacts(patch) {
+  saveProfile(patch) {
     const subject = current();
     subject.profile = {
       ...subject.profile,
-      ...(patch.phone && { phone: patch.phone }),
-      ...(patch.careCenterPhone && { careCenterPhone: patch.careCenterPhone }),
+      ...(patch.phone !== undefined && { phone: patch.phone }),
+      ...(patch.careCenterPhone !== undefined && { careCenterPhone: patch.careCenterPhone }),
+      ...(patch.place !== undefined && { place: patch.place }),
     };
     return resolve(undefined);
   },
+
+  removeMember(id) {
+    const subject = current();
+    if (id === ME.id) {
+      // 돌봄에서 나가면 대상 목록에서 빠지고 첫 번째 대상을 보여준다
+      subjects = subjects.filter((item) => item !== subject);
+      selectedId = null;
+    } else {
+      subject.profile = {
+        ...subject.profile,
+        family: subject.profile.family.filter((member) => member.id !== id),
+      };
+    }
+    return resolve(undefined);
+  },
+
+  createInvite: () =>
+    resolve({ code: INVITE_CODE, expiresAt: new Date(NOW.getTime() + INVITE_MINUTES * 60_000) }),
 
   notificationPrefs: () => resolve((prefs ??= loadPrefs())),
 
@@ -446,7 +474,23 @@ export const mockSource: CareSource = {
     return resolve(id);
   },
 
-  joinByInvite(code) {
+  previewInvite(code) {
+    if (!/^\d{6}$/.test(code.trim())) {
+      return Promise.reject(new Error('6자리 숫자 코드를 입력해 주세요.'));
+    }
+    return resolve({
+      subjectName: '할머니',
+      inviterName: '김민수',
+      status: subjects.some((subject) => subject.id === INVITED_ID)
+        ? ('accepted' as const)
+        : ('pending' as const),
+      expiresAt: new Date(NOW.getTime() + INVITE_MINUTES * 60_000),
+    });
+  },
+
+  declineInvite: () => resolve(undefined),
+
+  acceptInvite(code) {
     if (!/^\d{6}$/.test(code.trim())) {
       return Promise.reject(new Error('6자리 숫자 코드를 입력해 주세요.'));
     }

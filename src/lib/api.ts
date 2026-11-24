@@ -39,7 +39,7 @@ export type RequestOptions = {
   headers?: Record<string, string>;
 };
 
-function buildUrl(path: string, query?: Query) {
+export function buildUrl(path: string, query?: Query) {
   const params = Object.entries(query ?? {})
     .filter(([, value]) => value !== undefined && value !== null)
     .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);

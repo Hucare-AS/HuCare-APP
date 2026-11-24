@@ -1,5 +1,7 @@
+import { Platform } from 'react-native';
+
 import { ApiError, idempotencyKey } from '@/lib/api';
-import { authedRequest, currentUser } from '@/lib/auth';
+import { authedRequest, authedStream, currentUser } from '@/lib/auth';
 import {
   METRIC_KEYS,
   monthKey,
@@ -8,7 +10,9 @@ import {
   type Assessment,
   type CareEvent,
   type CareSource,
-  type ContactsPatch,
+  type InvitePreview,
+  type LiveChange,
+  type ProfilePatch,
   type DayRecord,
   type DayStatus,
   type HomeStatus,
@@ -96,7 +100,21 @@ type ApiContact = {
   phone: string;
   version: number;
 };
-type ApiMember = { user_id: string; name: string };
+type ApiMember = {
+  id: string;
+  user_id: string;
+  name: string;
+  role: 'owner' | 'caregiver' | 'viewer';
+};
+
+type ApiDevice = { id: string; location: string | null; version: number };
+
+type ApiInvitation = {
+  subject_name: string;
+  inviter_name: string;
+  status: InvitePreview['status'];
+  expires_at: string;
+};
 
 type ApiPrefs = {
   fall: boolean;
@@ -212,7 +230,80 @@ function parseInvite(text: string) {
     /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\?token=([A-Za-z0-9_-]{43})/i.exec(
       text.trim(),
     );
-  return match ? { id: match[1], token: match[2] } : null;
+  if (!match) throw new Error('받은 초대 링크를 그대로 붙여 넣어 주세요.');
+  return { id: match[1], token: match[2] };
+}
+
+/** 백엔드가 주는 초대 주소는 `/invitations/{id}?token=` 처럼 상대 경로일 수 있어 웹앱 주소를 붙인다 */
+function absoluteInviteUrl(url: string) {
+  if (/^https?:\/\//.test(url)) return url;
+  const origin =
+    Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : '';
+  return `${origin}${url.startsWith('/') ? '' : '/'}${url}`;
+}
+
+/** 기기 설치 장소는 대상이 아니라 연결된 기기에 저장된다 */
+async function savePlace(location: string) {
+  const raw = await home();
+  if (!raw.device) throw new Error('연결된 기기가 없어 설치 장소를 저장할 수 없어요.');
+  const device = await authedRequest<ApiDevice>(`/guardian/devices/${raw.device.id}`);
+  await authedRequest(`/guardian/devices/${device.id}`, {
+    method: 'PATCH',
+    body: { version: device.version, location },
+  });
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** SSE 한 덩어리에서 event 이름과 id 를 꺼낸다 */
+function parseSse(block: string) {
+  const field = (name: string) => new RegExp(`^${name}:\\s?(.*)$`, 'm').exec(block)?.[1] ?? null;
+  return { event: field('event'), id: field('id') };
+}
+
+/**
+ * /stream 을 읽어 변경이 오면 알린다. 서버가 60초마다 연결을 닫으므로 다시 붙고, 실패하면 점점 늦게 다시 시도한다.
+ * 네이티브 fetch 는 본문을 흘려 읽을 수 없어 웹에서만 쓴다.
+ */
+function watchStream(onChange: (change: LiveChange) => void) {
+  const controller = new AbortController();
+  (async () => {
+    let delay = 1000;
+    while (!controller.signal.aborted) {
+      try {
+        const { id } = await subject();
+        const response = await authedStream('/stream', { subject_id: id }, controller.signal);
+        delay = 1000;
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true }).replace(/\r/g, '');
+          let end = buffer.indexOf('\n\n');
+          while (end >= 0) {
+            const { event, id: eventId } = parseSse(buffer.slice(0, end));
+            buffer = buffer.slice(end + 2);
+            end = buffer.indexOf('\n\n');
+            // 연결 직후 오는 ready 이벤트와 keepalive 주석은 변경이 아니다
+            if (!event || eventId?.startsWith('ready-')) continue;
+            if (event === 'membership_revoked') {
+              listPromise = null;
+              onChange('membership_revoked');
+            } else {
+              onChange('changed');
+            }
+          }
+        }
+      } catch {
+        if (controller.signal.aborted) return;
+        delay = Math.min(delay * 2, 30_000);
+      }
+      await sleep(delay);
+    }
+  })();
+  return () => controller.abort();
 }
 
 async function home(id?: string) {
@@ -253,12 +344,16 @@ async function patchPrefs(patch: Partial<NotificationPrefs>) {
   return toPrefs(raw);
 }
 
-/** 연락처가 있으면 version 을 실어 수정하고, 없으면 새로 만든다 */
-async function saveContact(kind: 'subject' | 'care_center', phone: string) {
+/** 연락처가 있으면 version 을 실어 수정하고, 없으면 새로 만든다. phone 이 null 이면 지운다 */
+async function saveContact(kind: 'subject' | 'care_center', phone: string | null) {
   const target = await subject();
   const path = `/guardian/subjects/${target.id}/contacts`;
   const { items } = await authedRequest<{ items: ApiContact[] }>(path);
   const found = items.find((contact) => contact.kind === kind);
+  if (phone === null) {
+    if (found) await authedRequest(`${path}/${found.id}`, { method: 'DELETE' });
+    return;
+  }
   if (found) {
     await authedRequest(`${path}/${found.id}`, {
       method: 'PATCH',
@@ -358,7 +453,12 @@ export const apiSource: CareSource = {
       subjectLabel: subjectLabel(target),
       phone: phoneOf('subject'),
       place: homeView.device?.location ?? null,
-      family: members.items.map((member) => (member.user_id === me ? '나' : member.name)),
+      family: members.items.map((member) => ({
+        id: member.id,
+        name: member.user_id === me ? '나' : member.name,
+        me: member.user_id === me,
+      })),
+      canManage: members.items.some((member) => member.user_id === me && member.role === 'owner'),
       careCenterPhone: phoneOf('care_center'),
     };
   },
@@ -382,9 +482,32 @@ export const apiSource: CareSource = {
     return toEvent(await authedRequest<ApiEvent>(`/events/${id}/ack`, { method: 'POST' }));
   },
 
-  async saveContacts(patch: ContactsPatch) {
-    if (patch.phone) await saveContact('subject', patch.phone);
-    if (patch.careCenterPhone) await saveContact('care_center', patch.careCenterPhone);
+  async saveProfile(patch: ProfilePatch) {
+    if (patch.phone !== undefined) await saveContact('subject', patch.phone);
+    if (patch.careCenterPhone !== undefined) {
+      await saveContact('care_center', patch.careCenterPhone);
+    }
+    if (patch.place !== undefined) await savePlace(patch.place);
+  },
+
+  async removeMember(memberId) {
+    const { id } = await subject();
+    await authedRequest(`/guardian/subjects/${id}/members/${memberId}`, { method: 'DELETE' });
+    // 나를 내보냈으면 이 대상이 목록에서 빠진다
+    listPromise = null;
+  },
+
+  async createInvite() {
+    const { id } = await subject();
+    const raw = await authedRequest<{ invite_url: string; expires_at: string }>(
+      `/guardian/subjects/${id}/invitations`,
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey() },
+        body: { role: 'caregiver' },
+      },
+    );
+    return { code: absoluteInviteUrl(raw.invite_url), expiresAt: new Date(raw.expires_at) };
   },
 
   async subjects() {
@@ -432,14 +555,28 @@ export const apiSource: CareSource = {
     return created.id;
   },
 
-  async joinByInvite(code) {
-    const invite = parseInvite(code);
-    if (!invite) throw new Error('받은 초대 링크를 그대로 붙여 넣어 주세요.');
-    await authedRequest(`/guardian/invitations/${invite.id}/accept`, {
-      method: 'POST',
-      body: { token: invite.token },
+  async previewInvite(code) {
+    const { id, token } = parseInvite(code);
+    const raw = await authedRequest<ApiInvitation>(`/guardian/invitations/${id}`, {
+      query: { token },
     });
+    return {
+      subjectName: raw.subject_name,
+      inviterName: raw.inviter_name,
+      status: raw.status,
+      expiresAt: new Date(raw.expires_at),
+    };
+  },
+
+  async acceptInvite(code) {
+    const { id, token } = parseInvite(code);
+    await authedRequest(`/guardian/invitations/${id}/accept`, { method: 'POST', body: { token } });
     listPromise = null;
+  },
+
+  async declineInvite(code) {
+    const { id, token } = parseInvite(code);
+    await authedRequest(`/guardian/invitations/${id}/decline`, { method: 'POST', body: { token } });
   },
 
   inviteInput: {
@@ -450,6 +587,11 @@ export const apiSource: CareSource = {
 
   async media() {
     return { supported: false, reason: '사진·영상은 아직 준비 중이에요.' };
+  },
+
+  watch(onChange) {
+    if (Platform.OS !== 'web' || typeof TextDecoder === 'undefined') return () => {};
+    return watchStream(onChange);
   },
 
   reset() {
