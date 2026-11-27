@@ -27,12 +27,13 @@ export default function SplashScreen() {
       <Text className="absolute top-[27%] text-[36px] font-bold leading-[47px] tracking-[-0.9px] text-black">
         HuCare
       </Text>
+      {/* HULAB AI 로고타입 (683:140). 시안의 102px 폭을 유지한다 */}
       <View className="absolute" style={{ bottom: insets.bottom + 26 }}>
         <Image
           source={logo}
-          accessibilityLabel="huLAB"
+          accessibilityLabel="HULAB AI"
           contentFit="contain"
-          className="h-[34px] w-[102px]"
+          className="h-[21px] w-[102px]"
         />
       </View>
     </View>

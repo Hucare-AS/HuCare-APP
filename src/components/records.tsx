@@ -28,6 +28,18 @@ export function RecordTabs({ active }: { active: 'today' | 'month' }) {
   );
 }
 
+/** 추세 그래프(Figma 975:4275)로 가는 버튼 */
+export function TrendLink() {
+  return (
+    <Button
+      label="추세 그래프 보기"
+      variant="ghost"
+      onPress={() => router.push('/records/trend')}
+      className="mt-4"
+    />
+  );
+}
+
 /** 베이지 요약 카드 */
 export function SummaryCard({ title, detail }: { title: string; detail: string }) {
   return (

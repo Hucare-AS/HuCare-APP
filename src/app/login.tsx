@@ -1,162 +1,175 @@
-import { Redirect, router } from 'expo-router';
+import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, View } from 'react-native';
 
+import {
+  AuthHeader,
+  AuthSubmit,
+  AuthSwitch,
+  AuthTitle,
+  describeAuthError,
+  GOOGLE_NOT_READY,
+  GoogleButton,
+  PASSWORD_RULE,
+  UnderlineField,
+} from '@/components/auth-form';
 import { Screen } from '@/components/screen';
-import { Button } from '@/components/ui/button';
+import { Icon } from '@/components/ui/icon';
 import { Text } from '@/components/ui/text';
-import { ApiError } from '@/lib/api';
-import { login, signup, useAuth } from '@/lib/auth';
+import { useScreenInsets } from '@/hooks/use-screen-insets';
+import { login, requestPasswordReset, useAuth } from '@/lib/auth';
 import { cn } from '@/lib/cn';
 
-type Mode = 'login' | 'signup';
+type Message = { text: string; error: boolean } | null;
 
-type FieldProps = {
-  label: string;
-  value: string;
-  onChangeText: (value: string) => void;
-  secure?: boolean;
-  email?: boolean;
-  autoComplete?: 'email' | 'password' | 'new-password' | 'name';
-  onSubmitEditing?: () => void;
-};
-
-function Field({ label, value, onChangeText, secure, email, autoComplete, ...rest }: FieldProps) {
-  return (
-    <View className="gap-1">
-      <Text className="font-semibold">{label}</Text>
-      <TextInput
-        accessibilityLabel={label}
-        value={value}
-        onChangeText={onChangeText}
-        secureTextEntry={secure}
-        keyboardType={email ? 'email-address' : 'default'}
-        autoCapitalize="none"
-        autoCorrect={false}
-        autoComplete={autoComplete}
-        returnKeyType="next"
-        placeholderTextColor="#767676"
-        className="h-12 rounded-lg border border-line bg-white px-4 font-sans text-[16px] text-ink"
-        {...rest}
-      />
-    </View>
-  );
-}
-
-function describe(error: unknown) {
-  if (error instanceof ApiError) {
-    if (error.code === 'VALIDATION_ERROR' && Object.keys(error.fields).length) {
-      return '입력한 내용을 다시 확인해 주세요.';
-    }
-    return error.message;
-  }
-  return '잠시 후 다시 시도해 주세요.';
-}
-
-/** 보호자 로그인 · 가입. Figma 에 시안이 없어 기존 화면 스타일에 맞춰 만들었다. */
+/** 로그인 (Figma 946:1159) */
 export default function LoginScreen() {
   const auth = useAuth();
-  const [mode, setMode] = useState<Mode>('login');
-  const [name, setName] = useState('');
+  const insets = useScreenInsets();
+  const { notice } = useLocalSearchParams<{ notice?: string }>();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [remember, setRemember] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
+  const [message, setMessage] = useState<Message>(
+    notice === 'confirm'
+      ? { text: '메일함에서 인증을 마친 뒤 로그인해 주세요.', error: false }
+      : null,
+  );
 
   if (auth.status === 'signedIn') return <Redirect href="/home" />;
 
-  const isSignup = mode === 'signup';
-  const canSubmit =
-    !busy &&
-    email.trim() !== '' &&
-    password.length >= (isSignup ? 8 : 1) &&
-    (!isSignup || !!name.trim());
+  const canSubmit = !busy && email.trim() !== '' && password !== '';
 
   const submit = async () => {
     if (!canSubmit) return;
     setBusy(true);
     setMessage(null);
     try {
-      if (isSignup) {
-        const result = await signup(email, password, name);
-        if (result === 'CONFIRM_EMAIL') {
-          setMode('login');
-          setMessage({ text: '메일함에서 인증을 마친 뒤 로그인해 주세요.', error: false });
-          return;
-        }
-      } else {
-        await login(email, password);
-      }
+      await login(email, password, remember);
       router.replace('/home');
     } catch (error) {
-      setMessage({ text: describe(error), error: true });
+      setMessage({ text: describeAuthError(error), error: true });
     } finally {
       setBusy(false);
     }
   };
 
+  const resetPassword = async () => {
+    if (!email.trim()) {
+      setMessage({ text: '비밀번호를 찾을 이메일을 먼저 입력해 주세요.', error: true });
+      return;
+    }
+    try {
+      await requestPasswordReset(email);
+      setMessage({
+        text: '비밀번호 재설정 메일을 보냈어요. 메일함을 확인해 주세요.',
+        error: false,
+      });
+    } catch (error) {
+      setMessage({ text: describeAuthError(error), error: true });
+    }
+  };
+
   return (
-    <Screen>
+    <Screen className="bg-white">
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         className="flex-1"
       >
+        <AuthHeader />
         <ScrollView
           keyboardShouldPersistTaps="handled"
-          contentContainerClassName="px-6 pb-10 pt-16"
+          contentContainerClassName="grow px-[26px]"
+          contentContainerStyle={{ paddingBottom: insets.bottom + 42 }}
         >
-          <Text className="text-[36px] font-bold leading-[47px] tracking-[-0.9px] text-black">
-            HuCare
-          </Text>
-          <Text className="mt-2 leading-[20px]">
-            {isSignup ? '보호자 계정을 만들어 주세요' : '보호자 계정으로 로그인해 주세요'}
+          <AuthTitle title="로그인" subtitle="계속하려면 로그인하세요" />
+
+          <GoogleButton
+            className="mt-[126px]"
+            onPress={() => setMessage({ text: GOOGLE_NOT_READY, error: true })}
+          />
+          <Text className="mt-4 text-center text-[13px] leading-[19.5px] tracking-[-0.325px]">
+            또는
           </Text>
 
-          <View className="mt-10 gap-4">
-            {isSignup ? (
-              <Field label="이름" value={name} onChangeText={setName} autoComplete="name" />
-            ) : null}
-            <Field
+          <View className="mt-[42px] gap-[15px]">
+            <UnderlineField
               label="이메일"
               value={email}
               onChangeText={setEmail}
-              email
+              placeholder="이메일을 입력해주세요"
+              keyboardType="email-address"
               autoComplete="email"
+              returnKeyType="next"
             />
-            <Field
-              label={isSignup ? '비밀번호 (8자 이상)' : '비밀번호'}
-              value={password}
-              onChangeText={setPassword}
-              secure
-              autoComplete={isSignup ? 'new-password' : 'password'}
-              onSubmitEditing={submit}
-            />
+            <View className="gap-2">
+              <UnderlineField
+                label="비밀번호"
+                value={password}
+                onChangeText={setPassword}
+                placeholder="비밀번호를 입력해주세요"
+                secure
+                autoComplete="password"
+                onSubmitEditing={submit}
+              />
+              <Text className="leading-[20px] tracking-normal text-muted">{PASSWORD_RULE}</Text>
+            </View>
           </View>
 
+          <View className="mt-1 flex-row items-center justify-between">
+            <Pressable
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: remember }}
+              onPress={() => setRemember(!remember)}
+              className="flex-row items-center gap-[11px] active:opacity-60"
+            >
+              {remember ? (
+                <View className="h-[17px] w-[19px] items-center justify-center rounded-full bg-primary">
+                  <View className="size-[7px] rounded-full bg-white" />
+                </View>
+              ) : (
+                <Icon name="keepCircle" width={19} height={17} />
+              )}
+              <Text className="text-[12px] leading-[20px] tracking-[-0.5px] opacity-60">
+                로그인 유지하기
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={resetPassword}
+              className="active:opacity-60"
+            >
+              <Text className="text-[12px] leading-[20px] tracking-[-0.5px] underline opacity-60">
+                비밀번호 찾기
+              </Text>
+            </Pressable>
+          </View>
+
+          <View className="mt-[33px]">
+            <AuthSubmit
+              label={busy ? '잠시만요…' : '로그인'}
+              disabled={!canSubmit}
+              onPress={submit}
+            />
+          </View>
           {message ? (
             <Text
               accessibilityLiveRegion="polite"
-              className={cn('mt-4', message.error ? 'text-status-alert' : 'text-primary')}
+              className={cn(
+                'mt-4 text-center',
+                message.error ? 'text-status-alert' : 'text-care-green',
+              )}
             >
               {message.text}
             </Text>
           ) : null}
 
-          <Button
-            label={busy ? '잠시만요…' : isSignup ? '가입하기' : '로그인'}
-            disabled={!canSubmit}
-            onPress={submit}
-            className={cn('mt-6', !canSubmit && 'opacity-50')}
-          />
-          <Button
-            label={isSignup ? '이미 계정이 있어요' : '처음이신가요? 가입하기'}
-            variant="neutral"
-            disabled={busy}
-            onPress={() => {
-              setMode(isSignup ? 'login' : 'signup');
-              setMessage(null);
-            }}
-            className="mt-2"
+          <View className="min-h-10 flex-1" />
+          <AuthSwitch
+            question="아직 계정이 없으신가요?"
+            action="회원가입"
+            onPress={() => router.push('/signup')}
           />
         </ScrollView>
       </KeyboardAvoidingView>

@@ -5,16 +5,29 @@ import {
   isSameDay,
   METRIC_KEYS,
   metricValues,
+  parseDayKey,
   type CalendarDay,
   type CareEvent,
   type CareSource,
   type DayRecord,
   type DayStatus,
-  type Profile,
+  type DeviceKind,
+  type FamilyMember,
+  type HomeStatus,
+  type HomeSummary,
   type Measurement,
   type MetricKey,
   type NotificationPrefs,
+  type Presence,
+  type Profile,
+  type SubjectKind,
+  type SubjectSummary,
   type TimelineBar,
+  type ConsentItem,
+  DeviceNotFoundError,
+  type TrendBucket,
+  type TrendMissing,
+  trendRange,
 } from '@/lib/care-model';
 
 /**
@@ -60,23 +73,6 @@ const EVENT_COPY: Record<
   },
 };
 
-let events: MockEvent[] = [
-  { id: 'fall-1026', kind: 'fall', at: new Date(2026, 9, 26, 19, 30), heartRate: 48 },
-  {
-    id: 'inactive-1026',
-    kind: 'inactive',
-    at: new Date(2026, 9, 26, 17, 54),
-    heartRate: 70,
-    ack: { by: GUARDIAN_NAME, at: new Date(2026, 9, 26, 18, 18) },
-  },
-  {
-    id: 'device-1025',
-    kind: 'deviceOff',
-    at: new Date(2026, 9, 25, 16, 54),
-    ack: { by: GUARDIAN_NAME, at: new Date(2026, 9, 25, 17, 1) },
-  },
-];
-
 const toCareEvent = (event: MockEvent): CareEvent => ({
   id: event.id,
   title: EVENT_COPY[event.kind].title,
@@ -121,55 +117,239 @@ const TODAY_TIMELINE: TimelineBar[] = [
   { height: 2, tone: 'idle' },
 ];
 
-const DATA_YEAR = 2026;
-const DATA_MONTH = 9;
-const ALERT_DAYS = [25, 26];
 const UNKNOWN_DAYS = [9];
 
-function measurement(date: Date, [hour, minute, hr, rr, spo2]: (typeof USUAL_DAY)[number]) {
-  const values: Record<MetricKey, number> = { hr, rr, spo2, ...DETAIL_VALUES };
+/** 카메라형 기기가 사진을 남기는 시각 (Figma 976:4855) */
+const PHOTO_TIMES: [number, number][] = [
+  [14, 30],
+  [12, 0],
+  [9, 30],
+  [7, 0],
+];
+
+type MockSubject = {
+  id: string;
+  label: string;
+  kind: SubjectKind;
+  device: DeviceKind | null;
+  /** 어머니 값에 더해 대상마다 다른 숫자를 만든다 */
+  offset: { hr: number; rr: number };
+  /** 기기 연결이 끊겨 오늘 기록이 없다 */
+  offline: boolean;
+  /** 새로 등록해 아직 측정 기록이 없다 */
+  empty: boolean;
+  presence: Presence;
+  events: MockEvent[];
+  profile: Profile;
+  records?: Map<string, DayRecord>;
+  /** 기기가 붙은 Wi-Fi */
+  network?: string;
+  /** 등록 중인 기기 번호 */
+  pendingDevice?: string;
+  consents?: ConsentItem[];
+};
+
+function newSubject(
+  fields: Pick<MockSubject, 'id' | 'label' | 'kind' | 'device'> &
+    Partial<MockSubject> & { place: string },
+): MockSubject {
   return {
-    id: `${dayKey(date)}-${hour}${minute}`,
+    offset: { hr: 0, rr: 0 },
+    offline: false,
+    empty: false,
+    presence: 'present',
+    events: [],
+    ...fields,
+    profile: fields.profile ?? {
+      subjectLabel: fields.label,
+      phone: null,
+      place: fields.place,
+      family: [ME],
+      canManage: true,
+      careCenterPhone: null,
+    },
+  };
+}
+
+const ME: FamilyMember = { id: 'member-me', name: '나', me: true };
+
+/** 홈 대상 목록 시안(976:4495)의 세 대상. 어머니가 기존 화면 시안의 데이터다 */
+let subjects: MockSubject[] = [
+  newSubject({
+    id: 'mother',
+    label: '어머니',
+    kind: 'elder',
+    device: 'camera',
+    place: '거실',
+    presence: 'measuring',
+    events: [
+      { id: 'fall-1026', kind: 'fall', at: new Date(2026, 9, 26, 19, 30), heartRate: 48 },
+      {
+        id: 'inactive-1026',
+        kind: 'inactive',
+        at: new Date(2026, 9, 26, 17, 54),
+        heartRate: 70,
+        ack: { by: GUARDIAN_NAME, at: new Date(2026, 9, 26, 18, 18) },
+      },
+      {
+        id: 'device-1025',
+        kind: 'deviceOff',
+        at: new Date(2026, 9, 25, 16, 54),
+        ack: { by: GUARDIAN_NAME, at: new Date(2026, 9, 25, 17, 1) },
+      },
+    ],
+    profile: {
+      subjectLabel: '어머니',
+      phone: '010-0000-0000',
+      place: '거실',
+      family: [ME, { id: 'member-sibling', name: '동생', me: false }],
+      canManage: true,
+      careCenterPhone: '011-0000-0000',
+    },
+  }),
+  newSubject({
+    id: 'jiwoo',
+    label: '지우',
+    kind: 'child',
+    device: 'camera',
+    place: '놀이방',
+    offset: { hr: 17, rr: 6 },
+  }),
+  newSubject({
+    id: 'bori',
+    label: '보리',
+    kind: 'pet',
+    device: 'radar',
+    place: '거실',
+    offset: { hr: 20, rr: 8 },
+    offline: true,
+    presence: 'unknown',
+    events: [{ id: 'device-bori-1026', kind: 'deviceOff', at: new Date(2026, 9, 26, 13, 20) }],
+  }),
+];
+
+let selectedId: string | null = null;
+
+function current() {
+  return subjects.find((subject) => subject.id === selectedId) ?? subjects[0];
+}
+
+function measurement(
+  subject: MockSubject,
+  date: Date,
+  [hour, minute, hr, rr, spo2]: (typeof USUAL_DAY)[number],
+): Measurement {
+  const values: Record<MetricKey, number> = {
+    hr: hr + subject.offset.hr,
+    rr: rr + subject.offset.rr,
+    spo2,
+    ...DETAIL_VALUES,
+  };
+  return {
+    id: `${subject.id}-${dayKey(date)}-${hour}${minute}`,
     at: new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour, minute),
     metrics: Object.fromEntries(
-      METRIC_KEYS.map((key) => [key, { value: values[key], assessment: 'usual' }]),
+      METRIC_KEYS.map((key) => [
+        key,
+        { value: values[key], assessment: 'usual', confidence: 'verified' },
+      ]),
     ) as Measurement['metrics'],
   };
 }
 
-function buildDay(day: number): DayRecord {
-  const date = new Date(DATA_YEAR, DATA_MONTH, day);
-  const status: DayStatus = UNKNOWN_DAYS.includes(day)
-    ? 'unknown'
-    : ALERT_DAYS.includes(day)
-      ? 'alert'
-      : 'normal';
+function buildDay(subject: MockSubject, date: Date): DayRecord {
   const isToday = isSameDay(date, NOW);
-  const rows = status === 'unknown' ? [] : isToday ? USUAL_DAY.slice(0, 1) : USUAL_DAY;
-  const measurements = rows.map((row) => measurement(date, row));
+  const events = subject.events.filter((event) => isSameDay(event.at, date));
+  const noData =
+    subject.empty || (subject.offline && isToday) || UNKNOWN_DAYS.includes(date.getDate());
+  const status: DayStatus = noData ? 'unknown' : events.length ? 'alert' : 'normal';
+  const rows = noData ? [] : isToday ? USUAL_DAY.slice(0, 1) : USUAL_DAY;
+  const measurements = rows.map((row) => measurement(subject, date, row));
   const heartRates = metricValues(measurements, 'hr');
-  const heartRange: DayRecord['heartRange'] = isToday
-    ? [67, 77]
-    : heartRates.length
-      ? [Math.min(...heartRates), Math.max(...heartRates)]
-      : null;
+  const isMotherToday = subject.id === 'mother' && isToday;
   return {
     date,
     status,
     measurementCount: measurements.length,
     measurements,
-    eventCount: events.filter((event) => isSameDay(event.at, date)).length,
-    heartRange,
-    timeline: isToday ? TODAY_TIMELINE : [],
+    eventCount: events.length,
+    heartRange: isMotherToday
+      ? [67, 77]
+      : heartRates.length
+        ? [Math.min(...heartRates), Math.max(...heartRates)]
+        : null,
+    timeline: isMotherToday ? TODAY_TIMELINE : [],
   };
 }
 
-const records = new Map(
-  Array.from({ length: NOW.getDate() }, (_, index) => buildDay(index + 1)).map((record) => [
-    dayKey(record.date),
-    record,
-  ]),
-);
+/** 이번 달 1일부터 오늘까지. 새로 등록한 대상은 오늘 하루만 있다 */
+function records(subject: MockSubject) {
+  if (!subject.records) {
+    const first = subject.empty ? NOW.getDate() : 1;
+    const days = Array.from(
+      { length: NOW.getDate() - first + 1 },
+      (_, index) => new Date(NOW.getFullYear(), NOW.getMonth(), first + index),
+    );
+    subject.records = new Map(days.map((date) => [dayKey(date), buildDay(subject, date)]));
+  }
+  return subject.records;
+}
+
+/** 이번 달 평균을 개인 기준선으로 보고 최신 값과의 차이를 낸다. 기록이 7일 미만이면 만드는 중 */
+function baselinesOf(subject: MockSubject): HomeSummary['baselines'] {
+  const latest = latestOf(subject);
+  const days = [...records(subject).values()];
+  if (!latest) return {};
+  const ready = days.filter((record) => record.measurementCount > 0).length >= 7;
+  const result: HomeSummary['baselines'] = {};
+  for (const key of ['hr', 'rr', 'spo2'] as const) {
+    const value = latest.metrics[key].value;
+    if (value === null) continue;
+    if (!ready) {
+      result[key] = { status: 'collecting' };
+      continue;
+    }
+    const values = days.flatMap((record) => metricValues(record.measurements, key));
+    const baseline = values.reduce((sum, item) => sum + item, 0) / values.length;
+    result[key] = { status: 'ready', deviation: Math.round(value - baseline) };
+  }
+  return result;
+}
+
+function homeStatus(subject: MockSubject, unacked: MockEvent | undefined) {
+  if (unacked && subject.offline && unacked.kind === 'deviceOff') {
+    return { status: 'offline' as HomeStatus, message: '기기 연결이 끊겼어요.' };
+  }
+  if (unacked) return { status: 'alert' as HomeStatus, message: '확인할 소식이 있어요.' };
+  if (subject.offline) return { status: 'offline' as HomeStatus, message: '기기 연결이 끊겼어요.' };
+  if (subject.empty) {
+    return { status: 'no_measurement' as HomeStatus, message: '아직 측정된 기록이 없어요.' };
+  }
+  return { status: 'ok' as HomeStatus, message: '평소와 비슷해요.' };
+}
+
+function latestOf(subject: MockSubject) {
+  const today = records(subject).get(dayKey(NOW));
+  return today?.measurements[today.measurements.length - 1] ?? null;
+}
+
+function summary(subject: MockSubject): SubjectSummary {
+  const unacked = subject.events.filter((event) => !event.ack);
+  const { status, message } = homeStatus(subject, unacked[0]);
+  return {
+    id: subject.id,
+    label: subject.label,
+    kind: subject.kind,
+    place: subject.profile.place,
+    device: subject.device,
+    status,
+    statusMessage: message,
+    presence: subject.presence,
+    primaryEventTitle: unacked[0] ? EVENT_COPY[unacked[0].kind].title : null,
+    latest: latestOf(subject),
+    unackedCount: unacked.length,
+  };
+}
 
 /** Figma 설정 화면(786:539)의 초기 상태 */
 const DEFAULT_PREFS: NotificationPrefs = {
@@ -177,6 +357,9 @@ const DEFAULT_PREFS: NotificationPrefs = {
   inactive: true,
   deviceOff: false,
   nightAlert: 'as-is',
+  baselineDeviation: true,
+  quietHours: null,
+  dailySummary: false,
 };
 
 /** 목업 알림 설정은 웹 localStorage 에 남긴다 (실제 모드에서는 계정에 저장) */
@@ -202,13 +385,43 @@ function loadPrefs(): NotificationPrefs {
 
 let prefs: NotificationPrefs | null = null;
 
-let profile: Profile = {
-  subjectLabel: '어머니',
-  phone: '010-0000-0000',
-  place: '거실',
-  family: ['나', '동생'],
-  careCenterPhone: '011-0000-0000',
-};
+/** 초대 코드로 참여하면 생기는 대상 */
+const INVITED_ID = 'grandma';
+
+/** 내가 만든 초대 코드. 시안의 확정 정책대로 10분 동안 쓸 수 있다 */
+const INVITE_CODE = '482917';
+const INVITE_MINUTES = 10;
+/** 목업에서 만료된 코드 (06-C 화면 확인용) */
+const EXPIRED_CODE = '000000';
+
+const FIRMWARE = '1.2.0';
+const MOCK_DOCS = [
+  {
+    id: 'guide',
+    title: 'HuCare 이용 안내',
+    effectiveAt: new Date(2026, 9, 1),
+    body: [
+      '## 기기 연결 상태',
+      '설정의 기기 관리에서 확인할 수 있어요.',
+      '',
+      '## 도움이 필요할 때',
+      '고객지원에서 문의를 접수해 주세요.',
+    ].join('\n'),
+  },
+];
+
+function consentsOf(subject: MockSubject): ConsentItem[] {
+  subject.consents ??= [
+    { purpose: 'metrics', granted: true, decidedAt: new Date(2026, 9, 1) },
+    {
+      purpose: 'photo',
+      granted: subject.device === 'camera' ? true : null,
+      decidedAt: subject.device === 'camera' ? new Date(2026, 9, 1) : null,
+    },
+    { purpose: 'video', granted: null, decidedAt: null },
+  ];
+  return subject.consents;
+}
 
 /** 화면이 로딩 상태를 한 번 거치도록 비동기로 돌려준다 */
 const resolve = <T>(value: T) => Promise.resolve(value);
@@ -217,32 +430,37 @@ export const mockSource: CareSource = {
   now: () => NOW,
 
   home() {
-    const today = records.get(dayKey(NOW))!;
-    const unacked = events.find((event) => !event.ack);
+    const subject = current();
+    const unacked = subject.events.find((event) => !event.ack);
+    const { status, message } = homeStatus(subject, unacked);
     return resolve({
       guardianName: GUARDIAN_NAME,
-      subjectLabel: '어머니',
-      place: '거실',
-      presence: 'measuring',
-      status: unacked ? 'alert' : 'ok',
-      statusMessage: unacked ? '확인할 소식이 있어요.' : '평소와 비슷해요.',
-      latest: today.measurements[today.measurements.length - 1] ?? null,
+      subjectLabel: subject.label,
+      device: subject.device,
+      place: subject.profile.place,
+      presence: subject.presence,
+      status,
+      statusMessage: message,
+      latest: latestOf(subject),
       primaryEvent: unacked ? toCareEvent(unacked) : null,
+      baselines: baselinesOf(subject),
     });
   },
 
-  events: () => resolve(events.map(toCareEvent)),
+  events: () => resolve(current().events.map(toCareEvent)),
 
   day(key) {
-    const record = records.get(key);
+    const record = records(current()).get(key);
     return record ? resolve(record) : Promise.reject(new Error('이 날짜의 기록을 찾을 수 없어요.'));
   },
 
   month(year, month) {
+    const subject = current();
+    const byKey = records(subject);
     const lastDay = new Date(year, month + 1, 0).getDate();
     const days: CalendarDay[] = Array.from({ length: lastDay }, (_, index) => {
       const date = new Date(year, month, index + 1);
-      return { date, status: records.get(dayKey(date))?.status ?? 'none' };
+      return { date, status: byKey.get(dayKey(date))?.status ?? 'none' };
     });
     const recorded = days.filter((day) => day.status !== 'none');
     return resolve({
@@ -250,21 +468,46 @@ export const mockSource: CareSource = {
       elapsedDays: recorded.length,
       usualDays: recorded.filter((day) => day.status === 'normal').length,
       unknownDays: recorded.filter((day) => day.status === 'unknown').length,
-      eventCount: events.filter(({ at }) => at.getFullYear() === year && at.getMonth() === month)
-        .length,
+      eventCount: subject.events.filter(
+        ({ at }) => at.getFullYear() === year && at.getMonth() === month,
+      ).length,
     });
   },
 
-  profile: () => resolve(profile),
+  profile: () => resolve(current().profile),
 
-  saveContacts(patch) {
-    profile = {
-      ...profile,
-      ...(patch.phone && { phone: patch.phone }),
-      ...(patch.careCenterPhone && { careCenterPhone: patch.careCenterPhone }),
+  saveProfile(patch) {
+    const subject = current();
+    subject.profile = {
+      ...subject.profile,
+      ...(patch.phone !== undefined && { phone: patch.phone }),
+      ...(patch.careCenterPhone !== undefined && { careCenterPhone: patch.careCenterPhone }),
+      ...(patch.place !== undefined && { place: patch.place }),
     };
     return resolve(undefined);
   },
+
+  removeMember(id) {
+    const subject = current();
+    if (id === ME.id) {
+      // 돌봄에서 나가면 대상 목록에서 빠지고 첫 번째 대상을 보여준다
+      subjects = subjects.filter((item) => item !== subject);
+      selectedId = null;
+    } else {
+      subject.profile = {
+        ...subject.profile,
+        family: subject.profile.family.filter((member) => member.id !== id),
+      };
+    }
+    return resolve(undefined);
+  },
+
+  createInvite: () =>
+    resolve({
+      code: INVITE_CODE,
+      expiresAt: new Date(NOW.getTime() + INVITE_MINUTES * 60_000),
+      validMinutes: INVITE_MINUTES,
+    }),
 
   notificationPrefs: () => resolve((prefs ??= loadPrefs())),
 
@@ -280,13 +523,263 @@ export const mockSource: CareSource = {
   },
 
   acknowledge(id) {
-    events = events.map((event) =>
+    const subject = current();
+    subject.events = subject.events.map((event) =>
       event.id === id && !event.ack ? { ...event, ack: { by: GUARDIAN_NAME, at: NOW } } : event,
     );
-    const event = events.find((item) => item.id === id);
+    const event = subject.events.find((item) => item.id === id);
     return event
       ? resolve(toCareEvent(event))
       : Promise.reject(new Error('알림을 찾을 수 없어요.'));
+  },
+
+  subjects: () => resolve(subjects.map(summary)),
+
+  setSubject(id) {
+    selectedId = id;
+  },
+
+  createSubject({ kind, name, place }) {
+    const id = `new-${subjects.length + 1}`;
+    subjects = [
+      ...subjects,
+      newSubject({ id, label: name, kind, device: null, place, empty: true }),
+    ];
+    return resolve(id);
+  },
+
+  previewInvite(code) {
+    if (!/^\d{6}$/.test(code.trim())) {
+      return Promise.reject(new Error('6자리 숫자 코드를 입력해 주세요.'));
+    }
+    return resolve({
+      subjectName: '할머니',
+      subjectDetail: '안방 · 레이더형',
+      inviterName: '김민수',
+      status:
+        code.trim() === EXPIRED_CODE
+          ? ('expired' as const)
+          : subjects.some((subject) => subject.id === INVITED_ID)
+            ? ('accepted' as const)
+            : ('pending' as const),
+      expiresAt: new Date(NOW.getTime() + INVITE_MINUTES * 60_000),
+    });
+  },
+
+  declineInvite: () => resolve(undefined),
+
+  acceptInvite(code) {
+    if (!/^\d{6}$/.test(code.trim())) {
+      return Promise.reject(new Error('6자리 숫자 코드를 입력해 주세요.'));
+    }
+    if (code.trim() === EXPIRED_CODE) {
+      return Promise.reject(new Error('초대코드를 확인하거나 새 코드를 요청해 주세요.'));
+    }
+    if (subjects.some((subject) => subject.id === INVITED_ID)) {
+      return Promise.reject(new Error('이미 참여한 대상이에요.'));
+    }
+    subjects = [
+      ...subjects,
+      newSubject({
+        id: INVITED_ID,
+        label: '할머니',
+        kind: 'elder',
+        device: 'radar',
+        place: '안방',
+        offset: { hr: -3, rr: 1 },
+      }),
+    ];
+    return resolve(undefined);
+  },
+
+  inviteInput: {
+    label: '6자리 초대 코드',
+    placeholder: '초대 코드 6자리를 입력해주세요',
+    hint: '코드가 만료됐다면 새 코드를 요청하세요.',
+  },
+
+  media(key) {
+    const subject = current();
+    if (subject.device !== 'camera') {
+      return resolve({
+        supported: false,
+        reason: subject.device
+          ? '레이더형 기기는 사진과 영상을 남기지 않아요.'
+          : '카메라형 기기를 연결하면 사진을 볼 수 있어요.',
+      });
+    }
+    const date = parseDayKey(key);
+    const record = records(subject).get(key);
+    if (!date || !record?.measurementCount)
+      return resolve({ supported: true, photos: [], videos: [] });
+    const place = subject.profile.place ?? '집';
+    const photos = PHOTO_TIMES.map(([hour, minute]) => ({
+      id: `${key}-${hour}${minute}`,
+      at: new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour, minute),
+      place,
+      title: `${place} 사진`,
+    })).filter((photo) => photo.at <= NOW);
+    const videos = subject.events
+      .filter((event) => event.kind !== 'deviceOff' && isSameDay(event.at, date))
+      .map((event) => ({ id: event.id, at: event.at, place, title: EVENT_COPY[event.kind].title }));
+    return resolve({ supported: true, photos, videos });
+  },
+
+  registerDevice(code, place) {
+    const subject = current();
+    const clean = code.trim().toUpperCase();
+    if (!clean || clean.endsWith('0000')) return Promise.reject(new DeviceNotFoundError());
+    subject.device = 'radar';
+    subject.profile = { ...subject.profile, place };
+    subject.pendingDevice = clean;
+    return resolve({
+      id: `${subject.id}-device`,
+      bindingId: `${subject.id}-binding`,
+      place,
+      kind: 'radar' as const,
+      model: 'HC-R1',
+      firmware: FIRMWARE,
+      connection: 'unknown' as const,
+      network: subject.network ?? null,
+    });
+  },
+
+  waitForDevice() {
+    const subject = current();
+    // 목업: 9999 로 끝나는 기기 번호는 서버 연결이 늦어지는 경우 (05-L)
+    if (subject.pendingDevice?.endsWith('9999')) {
+      return new Promise((done) => setTimeout(() => done(false), 300));
+    }
+    return new Promise((done) =>
+      setTimeout(() => {
+        subject.empty = false;
+        subject.offline = false;
+        subject.records = undefined;
+        done(true);
+      }, 600),
+    );
+  },
+
+  devices() {
+    const subject = current();
+    if (!subject.device) return resolve([]);
+    return resolve([
+      {
+        id: `${subject.id}-device`,
+        bindingId: `${subject.id}-binding`,
+        place: subject.profile.place,
+        kind: subject.device,
+        model: subject.device === 'camera' ? 'HC-C1' : 'HC-R1',
+        firmware: FIRMWARE,
+        connection: subject.offline ? ('offline' as const) : ('online' as const),
+        network: (subject.network ??= '우리집'),
+      },
+    ]);
+  },
+
+  checkFirmware: () => resolve({ latest: true, version: FIRMWARE }),
+
+  changeWifi(_deviceId, network, password) {
+    if (!password) return Promise.reject(new Error('Wi-Fi 비밀번호를 입력해 주세요.'));
+    current().network = network;
+    return resolve(undefined);
+  },
+
+  restartDevice: () => resolve(undefined),
+
+  unlinkDevice() {
+    const subject = current();
+    subject.device = null;
+    subject.offline = false;
+    return resolve(undefined);
+  },
+
+  consents: () => resolve(consentsOf(current()).map((item) => ({ ...item }))),
+
+  setConsent(purpose, granted) {
+    const subject = current();
+    subject.consents = consentsOf(subject).map((item) =>
+      item.purpose === purpose ? { ...item, granted, decidedAt: NOW } : item,
+    );
+    return resolve(undefined);
+  },
+
+  requestDeletion: () => resolve(undefined),
+
+  documents: () => resolve(MOCK_DOCS.map(({ body: _body, ...doc }) => doc)),
+
+  document(id) {
+    const found = MOCK_DOCS.find((doc) => doc.id === id);
+    return found ? resolve(found) : Promise.reject(new Error('문서를 찾을 수 없어요.'));
+  },
+
+  sendSupport(message) {
+    if (!message.trim()) return Promise.reject(new Error('문의 내용을 입력해 주세요.'));
+    return resolve('mock-ticket');
+  },
+
+  setCsMode: () => resolve(undefined),
+
+  trend(metric, period, anchor) {
+    const subject = current();
+    const byDay = records(subject);
+    const [from, until] = trendRange(period, anchor);
+    const missing: TrendMissing = !subject.device
+      ? 'no_device_binding'
+      : subject.offline
+        ? 'offline'
+        : 'not_measured';
+    const empty = (start: Date, end: Date): TrendBucket => ({
+      start,
+      end,
+      value: null,
+      count: 0,
+      confidence: null,
+      missing,
+    });
+    let buckets: TrendBucket[];
+    if (period === 'day') {
+      // 목업은 1분 칸 대신 측정 한 번을 한 칸으로 둔다
+      buckets = (byDay.get(dayKey(from))?.measurements ?? []).flatMap((measurement) => {
+        const value = measurement.metrics[metric].value;
+        if (value === null) return [];
+        const end = new Date(measurement.at.getTime() + 60_000);
+        return [
+          { start: measurement.at, end, value, count: 1, confidence: 'verified', missing: null },
+        ];
+      });
+      if (!buckets.length && from <= NOW) buckets = [empty(from, until < NOW ? until : NOW)];
+    } else {
+      buckets = [];
+      for (let day = from; day < until && day <= NOW;) {
+        const next = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
+        const values = metricValues(byDay.get(dayKey(day))?.measurements ?? [], metric);
+        buckets.push(
+          values.length
+            ? {
+                start: day,
+                end: next,
+                value: values.reduce((sum, value) => sum + value, 0) / values.length,
+                count: values.length,
+                confidence: 'verified',
+                missing: null,
+              }
+            : empty(day, next),
+        );
+        day = next;
+      }
+    }
+    // 개인 기준선: 이번 달 기록 전체의 평균. 기록이 거의 없으면 아직 모으는 중
+    const all = [...byDay.values()].flatMap((record) => metricValues(record.measurements, metric));
+    const recorded = [...byDay.values()].filter((record) => record.measurementCount > 0).length;
+    const baseline =
+      recorded >= 7
+        ? {
+            status: 'ready' as const,
+            value: Math.round(all.reduce((a, b) => a + b, 0) / all.length),
+          }
+        : { status: 'collecting' as const, validDays: recorded, requiredDays: 7 };
+    return resolve({ from, until, buckets, baseline });
   },
 
   reset() {},

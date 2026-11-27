@@ -4,28 +4,16 @@ import { Pressable, View } from 'react-native';
 
 import { LoadState } from '@/components/load-state';
 import { SubjectSheet, type SubjectField, type SubjectInfo } from '@/components/subject-sheet';
-import { TabScreen } from '@/components/tab-screen';
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
 import { Select } from '@/components/ui/select';
 import { Text } from '@/components/ui/text';
-import { Toggle } from '@/components/ui/toggle';
 import { isApiMode } from '@/lib/api';
 import { logout, useAuth } from '@/lib/auth';
-import {
-  saveContacts,
-  updateNotificationPrefs,
-  useNotificationPrefs,
-  useProfile,
-  type NightAlert,
-} from '@/lib/care';
+import { FlowRow, FlowScreen } from '@/components/flow-screen';
+import { removeMember, saveProfile, useProfile } from '@/lib/care';
 import { cn } from '@/lib/cn';
 import { updatePreferences, usePreferences, type Brightness } from '@/lib/preferences';
-
-const NIGHT_OPTIONS: { value: NightAlert; label: string }[] = [
-  { value: 'as-is', label: '그대로 받기' },
-  { value: 'morning', label: '아침에 모아 받기' },
-];
 
 const BRIGHTNESS_OPTIONS: { value: Brightness; label: string }[] = [
   { value: 'auto', label: '자동' },
@@ -57,12 +45,9 @@ type RowProps = {
 };
 
 function Row({ title, detail, detailClassName, right, raised, onPress }: RowProps) {
-  return (
-    <Pressable
-      disabled={!onPress}
-      onPress={onPress}
-      className={cn('min-h-[50px] flex-row items-center justify-between', raised && 'z-10')}
-    >
+  const className = cn('min-h-[50px] flex-row items-center justify-between', raised && 'z-10');
+  const body = (
+    <>
       <View className="flex-1 gap-1 pr-3">
         <Text className="text-[15px] font-semibold leading-[22px] tracking-[-0.375px]">
           {title}
@@ -70,76 +55,22 @@ function Row({ title, detail, detailClassName, right, raised, onPress }: RowProp
         {detail ? <Text className={cn('leading-[21px]', detailClassName)}>{detail}</Text> : null}
       </View>
       {right}
+    </>
+  );
+  // 누를 수 없는 행을 disabled Pressable 로 두면 웹에서 aria-disabled 가 안쪽 스위치까지 막는다
+  if (!onPress) return <View className={className}>{body}</View>;
+  return (
+    <Pressable accessibilityRole="button" onPress={onPress} className={className}>
+      {body}
     </Pressable>
   );
 }
 
 const chevron = <Icon name="rowChevron" width={6.4} height={10} />;
 
-function NotificationSection() {
-  const resource = useNotificationPrefs();
-  const prefs = resource.data;
-
-  if (!prefs) return <LoadState resource={resource} className="py-4" />;
-
-  return (
-    <View className="gap-4">
-      <Row
-        title="낙상"
-        detail="넘어지셨을 때 항상 바로 알려드려요"
-        right={
-          <Toggle
-            label="낙상"
-            checked={prefs.fall}
-            onChange={(fall) => updateNotificationPrefs({ fall })}
-          />
-        }
-      />
-      <Row
-        title="비활동"
-        detail="오래 움직임이 없을 때"
-        right={
-          <Toggle
-            label="비활동"
-            checked={prefs.inactive}
-            onChange={(inactive) => updateNotificationPrefs({ inactive })}
-          />
-        }
-      />
-      <Row
-        title="기기 꺼짐"
-        detail="기기가 꺼졌을 때"
-        right={
-          <Toggle
-            label="기기 꺼짐"
-            checked={prefs.deviceOff}
-            onChange={(deviceOff) => updateNotificationPrefs({ deviceOff })}
-          />
-        }
-      />
-      <Row
-        raised
-        title="야간 알림"
-        detail="넘어짐은 밤에도 바로 알려드려요"
-        detailClassName="text-[13px] font-light leading-[17px] tracking-[-0.325px]"
-        right={
-          <Select
-            label="야간 알림"
-            options={NIGHT_OPTIONS}
-            value={prefs.nightAlert}
-            onChange={(nightAlert) => updateNotificationPrefs({ nightAlert })}
-          />
-        }
-      />
-    </View>
-  );
-}
-
 function ProfileSection() {
   const resource = useProfile();
   const profile = resource.data;
-  // ponytail: 설치 장소·가족은 수정 API 미확인이라 화면 state로만 덮어쓴다. 전화번호·돌봄센터 연락처는 서버에 저장.
-  const [edits, setEdits] = useState<Partial<SubjectInfo>>({});
   const [field, setField] = useState<SubjectField | null>(null);
 
   if (!profile) return <LoadState resource={resource} className="py-4" />;
@@ -149,7 +80,6 @@ function ProfileSection() {
     place: profile.place ?? '',
     family: profile.family,
     careCenterPhone: profile.careCenterPhone ?? '',
-    ...edits,
   };
   const open = (f: SubjectField) => () => setField(f);
 
@@ -175,7 +105,9 @@ function ProfileSection() {
         />
         <Row
           title="함께 보는 가족"
-          detail={info.family.length ? info.family.join(', ') : NOT_SET}
+          detail={
+            info.family.length ? info.family.map((member) => member.name).join(', ') : NOT_SET
+          }
           right={chevron}
           onPress={open('family')}
         />
@@ -190,18 +122,17 @@ function ProfileSection() {
         title={profile.subjectLabel}
         field={field}
         info={info}
-        onSave={(patch) => {
-          const { place, family } = patch;
-          if (place !== undefined || family !== undefined) {
-            setEdits((prev) => ({
-              ...prev,
-              ...(place !== undefined && { place }),
-              ...(family && { family }),
-            }));
-          }
-          saveContacts({ phone: patch.phone, careCenterPhone: patch.careCenterPhone }).catch(
-            () => {},
-          );
+        canManage={profile.canManage}
+        onSave={(target, value) =>
+          saveProfile(target === 'place' ? { place: value ?? '' } : { [target]: value })
+        }
+        onRemove={async (member) => {
+          await removeMember(member.id, member.me);
+          if (member.me) router.navigate('/home');
+        }}
+        onInvite={() => {
+          setField(null);
+          router.navigate('/settings/invite');
         }}
         onClose={() => setField(null)}
       />
@@ -209,20 +140,32 @@ function ProfileSection() {
   );
 }
 
-/** 설정 (Figma 786:539) */
+/** 설정 (Figma 설정 플로우 main 989:3790 · 대상자 정보는 786:539) */
 export default function SettingsScreen() {
   const preferences = usePreferences();
   const auth = useAuth();
+  const profile = useProfile().data;
 
   return (
-    <TabScreen title="설정">
-      <View className="mt-4 gap-4 px-6">
-        <View className="z-20">
-          <Section title="알림 받기">
-            <NotificationSection />
-          </Section>
-        </View>
+    <FlowScreen
+      eyebrow="HuCare"
+      title="설정"
+      subtitle={
+        profile
+          ? `${profile.subjectLabel} · ${profile.canManage ? '주 보호자' : '보호자'}`
+          : undefined
+      }
+    >
+      <FlowRow title="기기 관리" meta="연결 상태와 설치 장소" href="/settings/devices" />
+      <FlowRow title="알림 설정" meta="이벤트별 수신과 방해금지" href="/settings/notifications" />
+      <FlowRow
+        title="개인정보와 동의"
+        meta="동의 이력과 데이터 삭제 요청"
+        href="/settings/privacy"
+      />
+      <FlowRow title="앱 정보와 고객지원" meta="공지사항 · FAQ · 문의" href="/settings/support" />
 
+      <View className="mt-6 gap-4">
         <Section title="대상자 정보">
           <ProfileSection />
         </Section>
@@ -244,10 +187,6 @@ export default function SettingsScreen() {
           </Section>
         </View>
 
-        <Section title="보안">
-          <Row title="개인정보 처리방침" right={chevron} />
-        </Section>
-
         {isApiMode && auth.status === 'signedIn' ? (
           <Section title="계정">
             <Row title={`${auth.user.displayName}님`} />
@@ -267,6 +206,6 @@ export default function SettingsScreen() {
           HuCare{'\n'}카메라 영상은 집 밖으로 나가지 않아요
         </Text>
       </View>
-    </TabScreen>
+    </FlowScreen>
   );
 }
